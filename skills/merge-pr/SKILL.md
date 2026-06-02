@@ -54,7 +54,7 @@ is the current worktree itself. Skip both steps. Sync the primary worktree direc
 
 ```bash
 # Resolve primary worktree root — first entry in worktree list is always primary
-PRIMARY=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+PRIMARY=$(git worktree list --porcelain | awk '/^worktree /{sub(/^worktree /, ""); print; exit}')
 git -C "$PRIMARY" fetch origin
 git -C "$PRIMARY" checkout <default-branch>
 git -C "$PRIMARY" pull origin <default-branch> --ff-only
