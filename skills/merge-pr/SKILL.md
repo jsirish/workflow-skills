@@ -37,6 +37,30 @@ description: Use when the user asks to merge an approved Pull Request (for examp
 
 ## Phase 3: Local Cleanup and Sync
 
+First, detect whether you are inside a git worktree:
+```bash
+git rev-parse --git-dir
+# Returns ".git/worktrees/<name>" in a worktree; ".git" in the primary checkout
+```
+
+### If running in a worktree (Claude Code default)
+
+`git checkout` and `git branch -D` both fail in a worktree: the default branch is checked
+out in the primary worktree (two worktrees cannot share a branch), and the feature branch
+is the current worktree itself. Skip both steps. Sync the primary worktree directly:
+
+```bash
+# Resolve primary worktree root from the common git dir
+PRIMARY=$(git rev-parse --git-common-dir | sed 's|/\.git$||')
+git -C "$PRIMARY" fetch origin
+git -C "$PRIMARY" pull origin <default-branch> --ff-only
+```
+
+The feature branch worktree is cleaned up automatically by Claude Code when the session
+ends — no manual deletion needed.
+
+### If running in the primary checkout
+
 1.  **Switch to Default Branch:**
     ```bash
     git remote show origin | grep 'HEAD branch'
@@ -70,7 +94,7 @@ description: Use when the user asks to merge an approved Pull Request (for examp
 
 ## Important Reminders
 
+- **`gh pr merge` is worktree-safe.** It uses the GitHub API and does not require being in the primary checkout. The Phase 3 split above is only about the local sync steps.
 - **Branch Deletion:** `gh pr merge --delete-branch` attempts to delete the PR's head/source branch after the merge when permissions allow. For PRs from forks, automatic deletion may fail or require manual deletion on the fork.
 - **Merge Conflicts:** If the PR has conflicts, resolve them before attempting to merge.
-- **Clean Workspace:** Before switching branches, ensure your local workspace is clean (`git status --short`).
-- **Verification:** Always verify that the merge was successful and that you are back on a clean, updated default branch.
+- **Verification:** Always verify that the merge was successful and that the primary worktree is on a clean, updated default branch.
