@@ -1,8 +1,8 @@
 # workflow-skills
 
-Cross-project agent skills for everyday development workflows — session onboarding, handoffs, pull request review, and merge workflows. Maintained by [Dynamic Agency](https://www.dynamicagency.com/).
+Cross-project agent skills for everyday development workflows — session onboarding, handoffs, pull request review, and merge workflows. Maintained by [Jason Irish](https://github.com/jsirish).
 
-These are the general, project-agnostic skills meant to run on nearly any repo, distinct from the domain-specific [silverstripe-skills](https://github.com/dynamic/silverstripe-skills) collection.
+These are the general, project-agnostic skills meant to run on nearly any repo, distinct from the domain-specific [silverstripe-skills](https://github.com/jsirish/silverstripe-skills) collection.
 
 ## Skills
 
@@ -21,19 +21,19 @@ Requires [skills.sh](https://skills.sh) (`npx skills`).
 ### Install all skills globally (Claude Code)
 
 ```bash
-npx skills add dynamic/workflow-skills --skill '*' -a claude-code -g
+npx skills add jsirish/workflow-skills --skill '*' -a claude-code -g
 ```
 
 ### Install specific skills
 
 ```bash
-npx skills add dynamic/workflow-skills --skill onboard --skill handoff -a claude-code -g
+npx skills add jsirish/workflow-skills --skill onboard --skill handoff -a claude-code -g
 ```
 
 ### Install for multiple agents
 
 ```bash
-npx skills add dynamic/workflow-skills --skill '*' -a claude-code -a opencode -g
+npx skills add jsirish/workflow-skills --skill '*' -a claude-code -a opencode -g
 ```
 
 ### Update
