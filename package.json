@@ -9,10 +9,10 @@
     "opencode",
     "copilot"
   ],
-  "author": "Dynamic Agency <dev@dynamicagency.com>",
+  "author": "Jason Irish <jsirish@users.noreply.github.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dynamic/workflow-skills.git"
+    "url": "https://github.com/jsirish/workflow-skills.git"
   }
 }
