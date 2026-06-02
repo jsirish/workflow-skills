@@ -37,10 +37,13 @@ description: Use when the user asks to merge an approved Pull Request (for examp
 
 ## Phase 3: Local Cleanup and Sync
 
-First, detect whether you are inside a git worktree:
+First, detect whether you are inside a linked git worktree:
 ```bash
-git rev-parse --git-dir
-# Returns ".git/worktrees/<name>" in a worktree; ".git" in the primary checkout
+if [ "$(git rev-parse --git-dir)" != "$(git rev-parse --git-common-dir)" ]; then
+  echo "linked worktree"
+else
+  echo "primary checkout"
+fi
 ```
 
 ### If running in a worktree (Claude Code default)
@@ -53,6 +56,7 @@ is the current worktree itself. Skip both steps. Sync the primary worktree direc
 # Resolve primary worktree root from the common git dir
 PRIMARY=$(git rev-parse --git-common-dir | sed 's|/\.git$||')
 git -C "$PRIMARY" fetch origin
+git -C "$PRIMARY" checkout <default-branch>
 git -C "$PRIMARY" pull origin <default-branch> --ff-only
 ```
 
