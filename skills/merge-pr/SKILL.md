@@ -53,8 +53,8 @@ out in the primary worktree (two worktrees cannot share a branch), and the featu
 is the current worktree itself. Skip both steps. Sync the primary worktree directly:
 
 ```bash
-# Resolve primary worktree root from the common git dir
-PRIMARY=$(git rev-parse --git-common-dir | sed 's|/\.git$||')
+# Resolve primary worktree root — first entry in worktree list is always primary
+PRIMARY=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
 git -C "$PRIMARY" fetch origin
 git -C "$PRIMARY" checkout <default-branch>
 git -C "$PRIMARY" pull origin <default-branch> --ff-only
