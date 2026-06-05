@@ -10,22 +10,29 @@ Optional second-pass for code PRs: `code-review:code-review` skill (Claude-based
 
 ## Environment
 
-The Bash tool doesn't source `~/.zshrc`. Run pr-agent inside a subshell `(...)` so credential overrides don't leak into the parent shell:
+The Bash tool doesn't source `~/.zshrc`. The recommended approach is a **wrapper script** (e.g. `~/bin/pr-agent`) that sources your shell profile and injects credentials, so callers need no env setup:
 
 ```sh
-(source ~/.zshrc; \
-  export OPENAI__KEY="$OPENAI_API_KEY"; \
-  export CONFIG__MODEL="<provider/model>"; \
-  export CONFIG__FALLBACK_MODELS='["<provider/fallback-model>"]'; \
-  export GITHUB__USER_TOKEN="$GITHUB_TOKEN"; \
-  pr-agent --pr_url <pr-url> <command>)
+#!/usr/bin/env bash
+source ~/.zshrc 2>/dev/null
+unset OPENAI_API_KEY  # prevent real paid key from leaking
+export OPENAI__KEY="$OPENAI_API_KEY"          # or your provider's key var
+export CONFIG__MODEL="<provider/model>"
+export CONFIG__FALLBACK_MODELS='["<provider/fallback-model>"]'
+export CONFIG__CUSTOM_MODEL_MAX_TOKENS=<tokens>  # if model isn't in pr-agent's built-in list
+export GITHUB__USER_TOKEN="$GITHUB_TOKEN"
+exec ~/.local/bin/pr-agent "$@"
 ```
 
-- `OPENAI__KEY`, `OPENAI__API_BASE`, `ANTHROPIC__KEY` etc. are dynaconf env vars — override pr-agent config without touching `.secrets.toml`.
-- `CONFIG__MODEL` — override the default model (`gpt-*` by default); prefix with the litellm provider (`openai/`, `anthropic/`, etc.) for non-OpenAI endpoints.
-- `CONFIG__FALLBACK_MODELS` — replace the default fallback to prevent accidental expensive model usage when the primary model fails.
-- `CONFIG__CUSTOM_MODEL_MAX_TOKENS` — required for models not in pr-agent's built-in token limit table (any non-standard model name).
-- Project-level config lives in `.pr_agent.toml` (if present).
+Place the wrapper earlier in `$PATH` than the pipx binary so `pr-agent` resolves to it transparently. Once configured, every `pr-agent` call works with no per-invocation env setup.
+
+**Key dynaconf vars** (can also be set inline if not using a wrapper):
+- `OPENAI__KEY`, `OPENAI__API_BASE`, `ANTHROPIC__KEY` etc. — override provider credentials without touching `.secrets.toml`
+- `CONFIG__MODEL` — override the default model (`gpt-*`); prefix with litellm provider (`openai/`, `anthropic/`, etc.) for non-OpenAI endpoints
+- `CONFIG__FALLBACK_MODELS` — replace the default fallback to prevent accidental expensive model usage
+- `CONFIG__CUSTOM_MODEL_MAX_TOKENS` — required for non-standard model names not in pr-agent's built-in token limit table
+
+Project-level config lives in `.pr_agent.toml` (if present).
 
 ## Commands
 
@@ -50,16 +57,11 @@ pr-agent --pr_url <pr-url> ask "<question>"
 ## Workflow
 
 1. **Identify the PR**: `gh pr view <number>` to confirm scope, then grab the URL.
-2. **Request pr-agent review** (use the subshell form from [Environment](#environment)):
+2. **Request pr-agent review**:
    ```sh
-   (source ~/.zshrc; \
-     export OPENAI__KEY="$OPENAI_API_KEY"; \
-     export CONFIG__MODEL="<provider/model>"; \
-     export CONFIG__FALLBACK_MODELS='["<provider/fallback-model>"]'; \
-     export GITHUB__USER_TOKEN="$GITHUB_TOKEN"; \
-     pr-agent --pr_url <pr-url> review)
+   pr-agent --pr_url <pr-url> review
    ```
-   For inline suggestions, also run `improve`.
+   For inline suggestions, also run `improve`. (Assumes wrapper script or env vars are configured — see [Environment](#environment).)
 3. **Optional Claude second-pass** (code PRs): invoke `code-review:code-review`. Useful for a second-model perspective — pr-agent uses GPT by default, Claude catches different patterns.
 4. **Read the posted feedback**:
    ```sh
