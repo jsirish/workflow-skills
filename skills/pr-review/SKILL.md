@@ -10,13 +10,22 @@ Optional second-pass for code PRs: `code-review:code-review` skill (Claude-based
 
 ## Environment
 
-The Bash tool doesn't source `~/.zshrc`, so always prepend env setup to any `pr-agent` invocation:
+The Bash tool doesn't source `~/.zshrc`. Run pr-agent inside a subshell `(...)` so credential overrides don't leak into the parent shell:
 
 ```sh
-source ~/.zshrc; export OPENAI__KEY="$OPENAI_API_KEY"; export GITHUB__USER_TOKEN="$GITHUB_TOKEN"
+(source ~/.zshrc; \
+  export OPENAI__KEY="$OPENAI_API_KEY"; \
+  export CONFIG__MODEL="<provider/model>"; \
+  export CONFIG__FALLBACK_MODELS='["<provider/fallback-model>"]'; \
+  export GITHUB__USER_TOKEN="$GITHUB_TOKEN"; \
+  pr-agent --pr_url <pr-url> <command>)
 ```
 
-Config lives in the repo at `.pr_agent.toml` (if present).
+- `OPENAI__KEY`, `OPENAI__API_BASE`, `ANTHROPIC__KEY` etc. are dynaconf env vars — override pr-agent config without touching `.secrets.toml`.
+- `CONFIG__MODEL` — override the default model (`gpt-*` by default); prefix with the litellm provider (`openai/`, `anthropic/`, etc.) for non-OpenAI endpoints.
+- `CONFIG__FALLBACK_MODELS` — replace the default fallback to prevent accidental expensive model usage when the primary model fails.
+- `CONFIG__CUSTOM_MODEL_MAX_TOKENS` — required for models not in pr-agent's built-in token limit table (any non-standard model name).
+- Project-level config lives in `.pr_agent.toml` (if present).
 
 ## Commands
 
@@ -41,10 +50,14 @@ pr-agent --pr_url <pr-url> ask "<question>"
 ## Workflow
 
 1. **Identify the PR**: `gh pr view <number>` to confirm scope, then grab the URL.
-2. **Request pr-agent review**:
+2. **Request pr-agent review** (use the subshell form from [Environment](#environment)):
    ```sh
-   source ~/.zshrc; export OPENAI__KEY="$OPENAI_API_KEY"; export GITHUB__USER_TOKEN="$GITHUB_TOKEN"
-   pr-agent --pr_url <pr-url> review
+   (source ~/.zshrc; \
+     export OPENAI__KEY="$OPENAI_API_KEY"; \
+     export CONFIG__MODEL="<provider/model>"; \
+     export CONFIG__FALLBACK_MODELS='["<provider/fallback-model>"]'; \
+     export GITHUB__USER_TOKEN="$GITHUB_TOKEN"; \
+     pr-agent --pr_url <pr-url> review)
    ```
    For inline suggestions, also run `improve`.
 3. **Optional Claude second-pass** (code PRs): invoke `code-review:code-review`. Useful for a second-model perspective — pr-agent uses GPT by default, Claude catches different patterns.
