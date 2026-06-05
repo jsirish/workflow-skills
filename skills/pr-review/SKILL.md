@@ -22,7 +22,7 @@ export GITHUB__USER_TOKEN="$GITHUB_TOKEN"
 ```
 
 - `SECTION__KEY` double-underscore is dynaconf's env convention (pr-agent sets `envvar_prefix=False`, so no prefix). These vars are read **only** by pr-agent — they don't collide with other tools' `OPENAI_API_KEY`/`OPENAI_API_BASE`.
-- `CONFIG__MODEL` overrides the default (`gpt-*`); prefix with the LiteLLM provider (`openai/`, `anthropic/`, …) so LiteLLM routes a custom model to your `OPENAI__API_BASE`.
+- `CONFIG__MODEL` overrides the default (`gpt-*`); prefix with the provider (`openai/`, `anthropic/`, …) to route a custom model to your `OPENAI__API_BASE`.
 - Setting `OPENAI__API_BASE` pins all openai-provider calls to your endpoint, so a stray real `OPENAI_API_KEY` in the environment can never reach `api.openai.com` via pr-agent — no `unset` needed.
 
 Project-level config lives in `.pr_agent.toml` (if present).
