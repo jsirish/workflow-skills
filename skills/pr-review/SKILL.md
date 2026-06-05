@@ -10,27 +10,20 @@ Optional second-pass for code PRs: `code-review:code-review` skill (Claude-based
 
 ## Environment
 
-The Bash tool doesn't source `~/.zshrc`. The recommended approach is a **wrapper script** (e.g. `~/bin/pr-agent`) that sources your shell profile and injects credentials, so callers need no env setup:
+pr-agent is configured entirely through **environment variables** — there is no user-global config file for the CLI (see [Notes](#notes)). Put this block in your shell rc (`~/.zshrc`) once, substituting your provider's endpoint, key var, and model:
 
 ```sh
-#!/usr/bin/env bash
-source ~/.zshrc 2>/dev/null
-unset OPENAI_API_KEY  # prevent real paid key from leaking
-export OPENAI__KEY="$OPENAI_API_KEY"          # or your provider's key var
-export CONFIG__MODEL="<provider/model>"
+export OPENAI__KEY="$YOUR_PROVIDER_KEY"
+export OPENAI__API_BASE="<https://your-endpoint/v1>"
+export CONFIG__MODEL="<provider/model>"            # e.g. openai/<model-name>
 export CONFIG__FALLBACK_MODELS='["<provider/fallback-model>"]'
-export CONFIG__CUSTOM_MODEL_MAX_TOKENS=<tokens>  # if model isn't in pr-agent's built-in list
+export CONFIG__CUSTOM_MODEL_MAX_TOKENS=<tokens>    # required if model isn't in pr-agent's built-in list
 export GITHUB__USER_TOKEN="$GITHUB_TOKEN"
-exec ~/.local/bin/pr-agent "$@"
 ```
 
-Place the wrapper earlier in `$PATH` than the pipx binary so `pr-agent` resolves to it transparently. Once configured, every `pr-agent` call works with no per-invocation env setup.
-
-**Key dynaconf vars** (can also be set inline if not using a wrapper):
-- `OPENAI__KEY`, `OPENAI__API_BASE`, `ANTHROPIC__KEY` etc. — override provider credentials without touching `.secrets.toml`
-- `CONFIG__MODEL` — override the default model (`gpt-*`); prefix with litellm provider (`openai/`, `anthropic/`, etc.) for non-OpenAI endpoints
-- `CONFIG__FALLBACK_MODELS` — replace the default fallback to prevent accidental expensive model usage
-- `CONFIG__CUSTOM_MODEL_MAX_TOKENS` — required for non-standard model names not in pr-agent's built-in token limit table
+- `SECTION__KEY` double-underscore is dynaconf's env convention (pr-agent sets `envvar_prefix=False`, so no prefix). These vars are read **only** by pr-agent — they don't collide with other tools' `OPENAI_API_KEY`/`OPENAI_API_BASE`.
+- `CONFIG__MODEL` overrides the default (`gpt-*`); prefix with the LiteLLM provider (`openai/`, `anthropic/`, …) so LiteLLM routes a custom model to your `OPENAI__API_BASE`.
+- Setting `OPENAI__API_BASE` pins all openai-provider calls to your endpoint, so a stray real `OPENAI_API_KEY` in the environment can never reach `api.openai.com` via pr-agent — no `unset` needed.
 
 Project-level config lives in `.pr_agent.toml` (if present).
 
@@ -38,7 +31,7 @@ Project-level config lives in `.pr_agent.toml` (if present).
 
 All commands write to the PR under the user's GitHub identity. Confirm before running `review`, `improve`, or `describe` (which rewrites the PR title and body) on a PR the user didn't author.
 
-> Every `pr-agent` invocation below assumes the env prefix from the [Environment](#environment) section is already prepended.
+In an interactive terminal the env block is already loaded, so just call `pr-agent`. Non-interactive callers (e.g. an agent's shell tool) that don't load your rc should prepend `source ~/.zshrc;`.
 
 ```sh
 # Review — posts a top-level review comment (correctness, security, completeness)
@@ -59,10 +52,10 @@ pr-agent --pr_url <pr-url> ask "<question>"
 1. **Identify the PR**: `gh pr view <number>` to confirm scope, then grab the URL.
 2. **Request pr-agent review**:
    ```sh
-   pr-agent --pr_url <pr-url> review
+   source ~/.zshrc; pr-agent --pr_url <pr-url> review
    ```
-   For inline suggestions, also run `improve`. (Assumes wrapper script or env vars are configured — see [Environment](#environment).)
-3. **Optional Claude second-pass** (code PRs): invoke `code-review:code-review`. Useful for a second-model perspective — pr-agent uses GPT by default, Claude catches different patterns.
+   For inline suggestions, also run `improve`. (Env vars from [Environment](#environment) must be loaded; the `source` covers non-interactive shells.)
+3. **Optional Claude second-pass** (code PRs): invoke `code-review:code-review`. Useful for a second-model perspective — pr-agent uses a different model by default, so Claude catches different patterns.
 4. **Read the posted feedback**:
    ```sh
    gh pr view <number> --json reviews
@@ -109,5 +102,6 @@ gh api repos/OWNER/REPO/pulls/<number>/comments \
 ## Notes
 
 - pr-agent is a **local CLI only** — there is no GitHub Action workflow firing on push.
-- If `pr-agent` is missing on PATH, install via `pipx install pr-agent` (the skill assumes it's already installed).
+- Install via `pipx install pr-agent`. **Do not edit the bundled `.secrets.toml` inside the pipx venv** — `pipx upgrade`/`reinstall` rebuilds the venv and wipes it. Configure via the env vars above instead (they live outside the venv and survive upgrades).
+- **There is no user-global config file for the CLI** (no `~/.pr_agent.toml`). pr-agent loads settings only from package-internal paths and actively blocks dynaconf's include/external-file mechanisms. The "global configuration" in the docs is the org-level `pr-agent-settings` GitHub repo, which applies only to the hosted GitHub App — not the CLI. Environment variables are the only global mechanism.
 - Project-specific guidance for pr-agent (when relevant) lives in the project's `.claude/CLAUDE.md` or `.agent/pr-agent.md`.
