@@ -69,7 +69,7 @@ When an upstream module lacks support for the target CMS version:
 ## Applying the Strategy to a Repo
 
 1. **Identify the versioning basis** — does this repo version against the recipe number or its own major? Check existing branch names and `composer.json` constraints.
-2. **Create the new numbered branch** from the current default for the new CMS major.
+2. **Migrate `master` if it holds active content.** If `master` is the current default and already carries the latest (e.g. SS6) content, create the numbered branch *from* `master` so no history is lost, then leave `master` in place for history. Otherwise, create the new numbered branch from the current default for the new CMS major.
 3. **Set it as the default branch** in GitHub settings; keep the previous version branch for backports.
 4. **Update CI configs** (GitHub Actions) to target the new default branch.
 5. **Update `composer.json`:**
@@ -82,6 +82,7 @@ When an upstream module lacks support for the target CMS version:
 ## Checklist
 
 - [ ] Default branch is an integer matching the recipe/CMS major (not `master`, not the module semver)
+- [ ] Any active content on `master` migrated to a numbered branch; `master` left in place for history
 - [ ] Previous major's branch retained for backports
 - [ ] No stray long-lived `N.x` branches for unsupported versions
 - [ ] CI configs point at the new default branch
