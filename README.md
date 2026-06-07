@@ -12,6 +12,7 @@ These are the general, project-agnostic skills meant to run on nearly any repo, 
 | `handoff` | Update the master HANDOFF.md with distilled knowledge and write a timestamped session log |
 | `pr-review` | Request and manage pull request reviews using pr-agent, with optional Claude second-pass |
 | `merge-pr` | Safely merge an approved PR, clean up branches, and sync the local repository |
+| `ss-branch-strategy` | Branch naming, default-branch rules, and fork workflow for Silverstripe CMS major version upgrades |
 | `ddev-legacy-php` | Enable EOL PHP versions (5.6–7.4) in DDEV v1.24+ on Apple Silicon (ARM64) |
 
 ## Installation

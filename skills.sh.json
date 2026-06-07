@@ -19,6 +19,13 @@
       ]
     },
     {
+      "title": "Upgrades",
+      "description": "Conventions for major framework/CMS version upgrades",
+      "skills": [
+        "ss-branch-strategy"
+      ]
+    },
+    {
       "title": "Dev Environment",
       "description": "Local development environment helpers",
       "skills": [
