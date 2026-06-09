@@ -36,6 +36,17 @@ description: Bootstrap agent context at the start of a new session. Reads projec
    git remote show origin | grep 'HEAD branch'
    git status --short
    ```
+4. Check codegraph index status:
+   ```bash
+   # If .codegraph/ exists, freshen the index (e.g. after branch switches or big pulls):
+   [ -d .codegraph ] && codegraph sync
+   ```
+   - If `.codegraph/` is **absent** and the project has source files (not a pure config/docs repo), offer to initialise:
+     ```bash
+     codegraph init && codegraph index
+     ```
+   - Once indexed, prefer `codegraph_context` / `codegraph_explore` over grep+Read for "how does X work" and architecture questions. Always pass `projectPath: <absolute project root>` to every codegraph tool call — the server never auto-detects the project.
+   - Skip initialisation for config-only or docs-only repos (e.g. `~/.claude/`).
 
 ---
 
