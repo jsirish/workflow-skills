@@ -66,6 +66,25 @@ When an upstream module lacks support for the target CMS version:
 
 ---
 
+## Auto-Merge on Integer Default Branches
+
+Auto-merge (`gh pr merge --auto`, the GitHub "Enable auto-merge" button) is **not** gated on
+the branch being named `master`/`main`. It works against any default branch — `6`, `5`, `3` —
+provided the repo is configured for it. If auto-merge "doesn't work," the cause is almost
+always a missing repo setting, not the branch name. Do **not** switch the default branch to
+`master` to make auto-merge work — that breaks the Composer aliasing above and fixes nothing.
+
+Prerequisites (per repo):
+
+1. **Enable "Allow auto-merge"** in repo settings — the most common missing piece:
+   `gh api -X PATCH repos/<owner>/<repo> -F allow_auto_merge=true`
+2. **Branch protection on the integer default branch** with at least one requirement (a
+   required status check or required review). Without a protection rule, `--auto` errors and
+   you must use a plain `gh pr merge --squash` instead. The `merge-pr` skill already resolves
+   the default branch dynamically, so plain squash-merge works against `6`/`5`/`3` today.
+
+---
+
 ## Applying the Strategy to a Repo
 
 1. **Identify the versioning basis** — does this repo version against the recipe number or its own major? Check existing branch names and `composer.json` constraints.
@@ -88,3 +107,4 @@ When an upstream module lacks support for the target CMS version:
 - [ ] CI configs point at the new default branch
 - [ ] `composer.json` branch-alias and constraints updated (`^6@dev` for dev stability)
 - [ ] Fork VCS repos declared in the **root** project `composer.json`, not a recipe
+- [ ] `allow_auto_merge` enabled on the repo (auto-merge is branch-name-agnostic — never switch to `master` for it)
