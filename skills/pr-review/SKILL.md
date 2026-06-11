@@ -14,7 +14,7 @@ pr-agent is configured entirely through **environment variables** — there is n
 
 ```sh
 export OPENAI__KEY="$YOUR_PROVIDER_KEY"
-export OPENAI__API_BASE="<https://your-endpoint/v1>"
+export OPENAI__API_BASE="https://your-endpoint/v1"   # your real endpoint URL — no angle brackets
 export CONFIG__MODEL="<provider/model>"            # e.g. openai/<model-name>
 export CONFIG__FALLBACK_MODELS='["<provider/fallback-model>"]'
 export CONFIG__CUSTOM_MODEL_MAX_TOKENS=<tokens>    # required if model isn't in pr-agent's built-in list

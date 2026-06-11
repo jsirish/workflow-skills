@@ -36,17 +36,23 @@ description: Bootstrap agent context at the start of a new session. Reads projec
    git remote show origin | grep 'HEAD branch'
    git status --short
    ```
-4. Check codegraph index status:
+4. Check code intelligence (codegraph). A `codegraph` MCP server indexes every
+   symbol/edge/file into local SQLite — querying it (`codegraph_context`, then one
+   `codegraph_explore`, always passing `projectPath: <absolute root>`) beats grep for
+   "how does X work" / architecture / where-is-X questions later in the session.
    ```bash
-   # If .codegraph/ exists, freshen the index (e.g. after branch switches or big pulls):
-   [ -d .codegraph ] && codegraph sync
+   if [ -d .codegraph ]; then
+     # Index exists — freshen after the branch switch / pull that started this session.
+     codegraph sync || echo "Warning: codegraph sync failed — index may be stale"
+   fi
    ```
-   - If `.codegraph/` is **absent** and the project has source files (not a pure config/docs repo), offer to initialise:
+   - If `.codegraph/` is **absent** and this is a non-trivial **code** project, offer
+     to initialize it (a file watcher then keeps it current):
      ```bash
      codegraph init && codegraph index
      ```
-   - Once indexed, prefer `codegraph_context` / `codegraph_explore` over grep+Read for "how does X work" and architecture questions. Always pass `projectPath: <absolute project root>` to every codegraph tool call — the server never auto-detects the project.
-   - Skip initialisation for config-only or docs-only repos (e.g. `~/.claude/`).
+   - Don't initialize unconditionally — skip config-only, docs-only, or otherwise
+     non-code projects. `.codegraph/` is a local artifact; ensure it's gitignored.
 
 ---
 
