@@ -73,7 +73,7 @@ pr-agent --pr_url <pr-url> ask "<question>"
 
 - **< 3 rounds**: only acceptable when the very first review finds nothing actionable (clean pass). If any round surfaces real findings, keep going.
 - **3 rounds**: default target. Covers the common pattern of a fix introducing a new edge case the reviewer catches on re-pass.
-- **4+ rounds**: expected for security issues, logic bugs, or when an earlier skip was later reversed (as happened with the `reviewThreads` finding on this PR).
+- **4+ rounds**: expected for security issues, logic bugs, or when an earlier skip was later reversed.
 
 ### Deciding What to Address
 
