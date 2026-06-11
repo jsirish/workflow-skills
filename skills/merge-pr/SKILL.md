@@ -17,10 +17,17 @@ description: Use when the user asks to merge an approved Pull Request (for examp
     ```
 2.  **Verify Conditions:**
     -   PR state is `OPEN`.
-    -   Review decision is `APPROVED` (or confirmed by user).
     -   All CI/GitHub Action checks are passing (`statusCheckRollup`).
     -   PR is mergeable (`mergeable: "MERGEABLE"` and `mergeStateStatus: "CLEAN"`).
     -   Confirm explicit user approval to merge.
+
+> [!NOTE]
+> `reviewDecision` only gates the merge when the repo has **CODEOWNERS or
+> required reviewers** configured. Without them, GitHub leaves it empty (`""`)
+> even on a sound PR — so don't treat a blank `reviewDecision` as a blocker.
+> `state: OPEN` + `mergeable: MERGEABLE` + `mergeStateStatus: CLEAN` plus the
+> user's go-ahead are sufficient. (The field is still fetched in the `--json`
+> call above — harmless to read.)
 
 ---
 
@@ -87,12 +94,16 @@ ends — no manual deletion needed.
 
 ---
 
-## Phase 4: Handoff & Documentation
+## Phase 4: Post-Merge Verification
 
-1.  **Invoke Handoff:**
-    Run the `/handoff` workflow to update `HANDOFF.md` and generate a session log. This ensures the project's state reflects the new merge.
-2.  **Verify PR Closure:**
+1.  **Verify PR Closure:**
     Confirm that the PR is closed on GitHub and any linked issues are also addressed.
+
+> [!NOTE]
+> **Do not auto-invoke `/handoff` from this skill.** Handoff is **user-invoked
+> only** — the user decides when the session's work is complete and runs
+> `/handoff` themselves as a separate step (cadence: `pr-review` → `merge-pr` →
+> `handoff`). Merging one PR does not mean the session is over.
 
 ---
 
