@@ -4,6 +4,12 @@ Cross-project agent skills for everyday development workflows — session onboar
 
 These are the general, project-agnostic skills meant to run on nearly any repo, distinct from the domain-specific [silverstripe-skills](https://github.com/jsirish/silverstripe-skills) collection.
 
+## Install
+
+```bash
+npx skills add jsirish/workflow-skills
+```
+
 ## Skills
 
 | Skill | Description |
