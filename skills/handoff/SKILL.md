@@ -116,6 +116,8 @@ the next agent will need.
 
 ## Phase 4: Execute and Finalize
 
+0. **Auto-memory check** — before writing any files to disk, ask: "Did this session surface anything worth saving to persistent memory?" Types worth capturing: a preference the user confirmed (`feedback`), a fact about the user's role or context (`user`), a project constraint or decision (`project`), a tool or repo pointer (`reference`). If yes, write the entry to `~/.claude/projects/.../memory/` using the established frontmatter format and update `MEMORY.md`. One entry per insight; skip if there's genuinely nothing new.
+
 1. Update `HANDOFF.md` with all synthesized changes from Phase 2.
 2. Update the **`Last Updated`** date at the top of `HANDOFF.md`.
 3. Add a link to the new session log under "Recent Session Logs" in `HANDOFF.md`. **Keep only the last 5 entries** — remove the oldest if needed.
