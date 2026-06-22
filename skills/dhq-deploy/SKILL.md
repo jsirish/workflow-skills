@@ -67,6 +67,21 @@ dhq deployments watch <deployment-id> -p <permalink>
 | `--full` | | Deploy entire branch from first commit |
 | `--timeout` | | Seconds before `--wait` gives up (0 = none) |
 
+## Check result and duration
+
+`--wait` exits non-zero on failure and prints final status inline. To inspect duration or retrieve the deployment ID for further commands:
+
+```bash
+# Most recent deployments with status and duration
+dhq deployments list -p <permalink>
+
+# Full details for a specific deployment
+dhq deployments show <deployment-id> -p <permalink>
+
+# Machine-readable (status, duration_seconds, etc.)
+dhq deployments show <deployment-id> -p <permalink> --json
+```
+
 ## Post-deploy
 
 DeployHQ runs any SSH commands configured on the server (e.g. `composer install`, `sake dev/build`, OPcache flush) automatically after the file transfer. No manual post-deploy steps are needed unless something is not in the server's SSH command list.
