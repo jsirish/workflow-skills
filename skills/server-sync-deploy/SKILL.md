@@ -65,7 +65,7 @@ PREPROD_DB_PASSWORD="db_password"
 PREPROD_DB_HOST="localhost"
 ```
 
-*Local execution relies on standard SS variables (`SS_DATABASE_NAME`, `SS_DATABASE_SERVER`, etc).*
+*Local execution relies on the application's database environment variables (`SS_DATABASE_NAME`, `SS_DATABASE_SERVER` for SilverStripe; adapt to your framework's equivalents).*
 
 ## Command Flags & Features
 
@@ -116,9 +116,11 @@ Both scripts accept identical command-line flags to isolate deployments or test 
 > **DeployHQ deletes files that are removed from git.** When a tracked file is **de-tracked** (removed from the repo), DeployHQ deletes it from the server on the next deploy. This silently wiped a server's `.env` after it was removed from version control. Keep server-only files (`.env`, secrets, uploaded assets outside `public/assets/`) in DeployHQ's **config files** / **excluded paths** feature, or recreate them out-of-band — never assume a de-tracked file survives on the server.
 
 > [!WARNING]
-> **Ploi requires `SS_DATABASE_SERVER=127.0.0.1`, not `localhost`.** On Ploi-managed servers, `localhost` resolves to a MySQL **socket path** that the SS4 DB layer can't use, and the connection fails. Use the TCP loopback in the server `.env`:
+> **Ploi requires `127.0.0.1`, not `localhost`, as the database server.** On Ploi-managed servers, `localhost` resolves to a MySQL **socket path** rather than the TCP interface, causing connection failures. Use the TCP loopback in the server `.env`:
 > ```text
+> # SilverStripe:
 > SS_DATABASE_SERVER="127.0.0.1"
+> # Other frameworks: set the equivalent DB_HOST / DATABASE_URL host to 127.0.0.1
 > ```
 
 > [!CAUTION]
