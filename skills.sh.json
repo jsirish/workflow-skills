@@ -31,7 +31,8 @@
       "skills": [
         "ddev-legacy-php",
         "ddev-sync",
-        "server-sync-deploy",
+        "server-sync",
+        "server-deploy",
         "dhq-deploy"
       ]
     },

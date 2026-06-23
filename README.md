@@ -21,7 +21,8 @@ npx skills add jsirish/workflow-skills
 | `ss-branch-strategy` | Branch naming, default-branch rules, and fork workflow for Silverstripe CMS major version upgrades |
 | `ddev-legacy-php` | Enable EOL PHP versions (5.6–7.4) in DDEV v1.24+ on Apple Silicon (ARM64) |
 | `ddev-sync` | Start DDEV, sync the remote database and assets to local, and run the framework build step |
-| `server-sync-deploy` | Sync databases and assets between DDEV local and remote servers using sync.sh / deploy.sh |
+| `server-sync` | Pull databases and assets from a remote server to the local DDEV environment using sync.sh |
+| `server-deploy` | Push local databases and assets to a remote pre-prod or staging server using deploy.sh |
 | `visual-regression-upgrade` | Capture full-page screenshots of two environments and produce a pixel-diff HTML report to verify visual parity |
 
 ## Installation
@@ -67,7 +68,8 @@ Once installed, skills activate automatically based on your request. For example
 - *"review this PR"* → `pr-review`
 - *"merge the approved PR"* → `merge-pr`
 - *"ddev sync"* or *"sync remote database"* → `ddev-sync`
-- *"deploy to staging"* or *"push local data to pre-prod"* → `server-sync-deploy`
+- *"pull remote database to local"* or *"sync from remote server"* → `server-sync`
+- *"deploy to staging"* or *"push local data to pre-prod"* → `server-deploy`
 - *"visual regression check"* or *"compare prod and staging visually"* → `visual-regression-upgrade`
 
 ## Contributing
