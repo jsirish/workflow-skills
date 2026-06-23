@@ -1,4 +1,6 @@
 {
   "author": "jsirish",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "name": "visual-regression-upgrade",
+  "description": "Verify visual parity between two web environments by capturing full-page screenshots and producing a pixel-diff HTML report. Use when verifying a major-version upgrade has not broken the front-end, comparing prod and staging visually, or answering did it look the same."
 }
