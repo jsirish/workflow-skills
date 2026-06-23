@@ -1,4 +1,5 @@
 {
   "author": "jsirish",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "description": "Establish consistent branch-naming and default-branch conventions across all module repos when executing a major framework or CMS version upgrade. Covers integer branch naming, default-branch promotion, previous-version preservation, and the fork-and-upstream workflow for third-party modules. Use when planning or executing a major version upgrade across a suite of repos."
 }
