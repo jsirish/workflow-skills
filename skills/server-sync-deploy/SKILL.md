@@ -18,8 +18,12 @@ In DDEV architectures, rather than executing builds or variant generations on a 
 
 > [!WARNING]
 > Both scripts are highly destructive. `sync.sh` will drop and overwrite the local DDEV database/assets. `deploy.sh` will drop and overwrite the remote database/assets. **Always confirm destinations before running.**
->
-> **Critical:** Never run `deploy.sh` when `PREPROD_*` points to the authoritative content source (e.g. pre-prod is the master before production goes live). Doing so destroys authoritative content. See [the full prohibition](#deploy-sh-prohibition-when-pre-prod-is-authoritative) below.
+
+> [!CAUTION]
+> **NEVER run `deploy.sh` when `PREPROD_*` points to the master content source.**
+> If pre-prod is the environment where editors work (e.g. production is not yet live),
+> overwriting pre-prod with local data destroys the authoritative content. In this case,
+> `PREPROD_*` should remain empty and `deploy.sh` should not be used at all.
 
 ## Prerequisites / Safety
 
@@ -131,14 +135,6 @@ Both scripts accept identical command-line flags to isolate deployments or test 
 > grep -E "REMOTE_HOST|PREPROD_HOST" .env    # must be two DIFFERENT hosts
 > grep -E "REMOTE_|PREPROD_" deploy.sh       # deploy.sh must read PREPROD_*
 > ```
-
-<a name="deploy-sh-prohibition-when-pre-prod-is-authoritative"></a>
-
-> [!CAUTION]
-> **NEVER run `deploy.sh` when `PREPROD_*` points to the master content source.**
-> If pre-prod is the environment where editors work (e.g. production is not yet live),
-> overwriting pre-prod with local data destroys the authoritative content. In this case,
-> `PREPROD_*` should remain empty and `deploy.sh` should not be used at all.
 
 ## Terminology
 
