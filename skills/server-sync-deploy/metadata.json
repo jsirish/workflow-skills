@@ -1,0 +1,6 @@
+{
+  "author": "jsirish",
+  "version": "1.0.0",
+  "name": "server-sync-deploy",
+  "description": "Sync databases and assets between DDEV local and remote servers using sync.sh / deploy.sh. Use when syncing databases, transferring assets, or pushing tested data to staging servers."
+}
