@@ -1,0 +1,6 @@
+{
+  "author": "jsirish",
+  "version": "1.0.0",
+  "name": "server-sync",
+  "description": "Pull databases and assets from a remote server to the local DDEV environment using sync.sh. Use when onboarding to a project, grabbing fresh production data, or refreshing local state before upgrade work."
+}

@@ -1,0 +1,6 @@
+{
+  "author": "jsirish",
+  "version": "1.0.0",
+  "name": "server-deploy",
+  "description": "Push local databases and assets to a remote pre-prod or staging server using deploy.sh. Use during major version upgrades or when deploying pre-computed public/assets to a staging environment."
+}
