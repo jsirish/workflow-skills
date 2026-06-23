@@ -29,7 +29,17 @@
       "title": "Dev Environment",
       "description": "Local development environment helpers",
       "skills": [
-        "ddev-legacy-php"
+        "ddev-legacy-php",
+        "ddev-sync",
+        "server-sync-deploy",
+        "dhq-deploy"
+      ]
+    },
+    {
+      "title": "Verification",
+      "description": "Visual and functional verification workflows",
+      "skills": [
+        "visual-regression-upgrade"
       ]
     }
   ]

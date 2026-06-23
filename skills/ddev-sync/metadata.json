@@ -1,0 +1,6 @@
+{
+  "author": "jsirish",
+  "version": "1.0.0",
+  "name": "ddev-sync",
+  "description": "Start DDEV, sync a remote database and assets into the local dev environment, and run the framework build step. Use when the user says \"ddev sync\", \"sync remote database\", \"pull remote data\", \"set up local dev\", or asks to sync a DDEV project with a remote environment."
+}
