@@ -47,6 +47,7 @@ REMOTE_DB_HOST="localhost"
 > **`REMOTE_*` and `PREPROD_*` must point at DIFFERENT hosts.** `sync.sh` reads `REMOTE_*` (pull FROM). [`deploy.sh`](../server-deploy/SKILL.md) reads `PREPROD_*` (push TO). If both vars resolve to the same host, you pull from pre-prod *and* deploy to pre-prod — production is never touched. Always verify before migration work:
 > ```bash
 > grep -E "REMOTE_HOST|PREPROD_HOST" .env    # must be two DIFFERENT hosts
+> grep "^REMOTE_" sync.sh                   # sync.sh must read REMOTE_*
 > ```
 
 ## Command Flags

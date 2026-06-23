@@ -68,7 +68,7 @@ Once installed, skills activate automatically based on your request. For example
 - *"review this PR"* → `pr-review`
 - *"merge the approved PR"* → `merge-pr`
 - *"ddev sync"* or *"sync remote database"* → `ddev-sync`
-- *"sync remote database"* or *"pull prod data to local"* → `server-sync`
+- *"pull remote database to local"* or *"sync from remote server"* → `server-sync`
 - *"deploy to staging"* or *"push local data to pre-prod"* → `server-deploy`
 - *"visual regression check"* or *"compare prod and staging visually"* → `visual-regression-upgrade`
 
