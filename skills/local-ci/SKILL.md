@@ -21,7 +21,9 @@ Cadence: `feature-dev` → **`local-ci`** → `/code-review` or `pr-review-toolk
 
 | Check | Fires when present | Command |
 |---|---|---|
-| dev/build | `vendor/bin/sake` (SilverStripe) | `sake dev/build flush=1` (WARN-only on failure) |
+| composer validate | `composer.json` present | `composer validate --strict` (FAIL-able) |
+| composer install | `vendor/` missing or `--fresh-deps` | `composer install` (else `--dry-run` resolve check) |
+| dev/build | `vendor/bin/sake` (SilverStripe) | `sake dev/build flush=1` (WARN-only; FAIL with `--strict-build`) |
 | PHPUnit | `phpunit.xml` / `.dist` | `vendor/bin/phpunit` |
 | PHPCS | `phpcs.xml` / `.dist` | `phpcbf` (auto-fix) → `phpcs --standard=…` |
 | PHPStan | `phpstan.neon` / `.dist` | `vendor/bin/phpstan analyse` |
@@ -47,6 +49,8 @@ Options:
 - `--dry-run` — detect checks and print what *would* run; execute nothing. Use this first on an unfamiliar project to see the plan before anything mutates files or the DB.
 - `--no-fix` — report only; do not run phpcbf / eslint --fix / ruff --fix.
 - `--no-build` — skip the SilverStripe `sake dev/build` step.
+- `--strict-build` — treat a failing `sake dev/build` as FAIL rather than WARN. Use when you want the same hard gate GHA enforces.
+- `--fresh-deps` — force a real `composer install` even when `vendor/` exists. Mirrors GHA's clean-install behaviour; slower and mutates `vendor/`. Use before a PR to verify a clean dependency resolution.
 - `--with-behat` — also run Behat (off by default; it needs a browser + chromedriver).
 - `DIR …` — one or more dirs to scan. Default: the current dir plus the common
   sub-package dirs `frontend/ client/ backend/ app/` when they exist (handles
@@ -54,7 +58,7 @@ Options:
 
 ### Execution context
 
-When a project has `.ddev/config.yaml`, **PHP** checks run via `ddev exec` (matches the SilverStripe + DDEV conventions). **JS and Python** checks always run on the host — DDEV web containers rarely carry the node/python toolchain. No flag needed; detection is automatic.
+When a project has `.ddev/config.yaml`, **PHP** checks run via `ddev exec` and **composer** via `ddev composer` (the DDEV wrapper handles container mounts correctly). **JS and Python** checks always run on the host — DDEV web containers rarely carry the node/python toolchain. No flag needed; detection is automatic.
 
 > **Note:** PHP-under-DDEV is supported at **project root**. `ddev exec` always runs from the container's configured working directory (`/var/www/html`), so per-dir `cd` into PHP sub-packages is not propagated into the container. Run from the project root for reliable results.
 
@@ -69,6 +73,7 @@ When augmenting a review:
 
 ## Notes
 
-- Run `composer install` / dependency install first — if `vendor/` is missing the PHP checks are reported as WARN, not silently skipped.
+- **`composer validate` and `composer install --dry-run` run automatically** on every PHP project — these are the same checks GHA performs implicitly when building the environment. If `vendor/` is missing, a real install runs instead. Use `--fresh-deps` for a full clean-install mirror.
+- `dev/build` failure is WARN by default because phpunit can sometimes self-bootstrap from its own bootstrap file. Pass `--strict-build` to make it a hard gate.
 - The script never commits. Auto-fixes are left in the working tree for you to review and commit.
 - A project with no recognised configs reports "nothing to run" rather than erroring.
