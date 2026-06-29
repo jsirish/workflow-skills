@@ -50,7 +50,7 @@ while [ $# -gt 0 ]; do
     --fresh-deps)   FRESH_DEPS=1 ;;
     --with-behat)   WITH_BEHAT=1 ;;
     --dry-run)      DRY=1 ;;
-    -h|--help)      sed -n '2,44p' "$0"; exit 0 ;;
+    -h|--help)      sed -n '2,33p' "$0"; exit 0 ;;
     --*)            echo "Unknown option: $1" >&2; exit 2 ;;
     *)              DIRS+=("$1") ;;
   esac
@@ -120,10 +120,9 @@ php_prefix() { # dir
   fi
 }
 
-# Echoes how to invoke composer for a dir: "ddev composer" under DDEV (handles
-# the container mount / mutagen sync correctly), else the host binary, else empty.
+# Under DDEV, use "ddev composer" — it handles container mounts / mutagen sync correctly.
 composer_cmd() { # dir
-  if [ -f "$1/.ddev/config.yaml" ] || { [ "$1" = "." ] && [ -f ".ddev/config.yaml" ]; }; then
+  if [ -n "$(php_prefix "$1")" ]; then
     echo "ddev composer"
   elif command -v composer >/dev/null 2>&1; then
     echo "composer"
@@ -144,19 +143,24 @@ php_checks() { # dir
     local CC; CC="$(composer_cmd .)"
     if [ -z "$CC" ]; then
       record SKIP "PHP[$d]: composer (no composer binary found)"
+      [ -d vendor ] || { record WARN "PHP[$d]: vendor/ missing — install dependencies first"; return 0; }
     else
       # Manifest + lock consistency (out-of-sync lock, malformed json).
       # --no-check-publish avoids spurious failures on private modules missing
       # name/license publish metadata while still enforcing lock consistency.
       run_check "PHP[$d]: composer validate" bash -c "$CC validate --strict --no-check-publish"
 
-      # Real install when vendor/ is absent or --fresh-deps forces a GHA mirror.
-      # Otherwise prove the lock still resolves against the platform without
-      # mutating vendor/ (dry-run mode).
       if [ "$FRESH_DEPS" -eq 1 ] || [ ! -d vendor ]; then
-        run_check "PHP[$d]: composer install" bash -c "$CC install --no-interaction --prefer-dist"
-        # If install failed, vendor/ may be incomplete — skip remaining PHP checks.
-        [ -d vendor ] || return 0
+        hdr "PHP[$d]: composer install"
+        if [ "$DRY" -eq 1 ]; then
+          printf '   \033[90m[dry-run] %s\033[0m\n' "$CC install --no-interaction --prefer-dist"
+          record PLAN "PHP[$d]: composer install"
+        elif bash -c "$CC install --no-interaction --prefer-dist"; then
+          record PASS "PHP[$d]: composer install"
+        else
+          record FAIL "PHP[$d]: composer install"
+          return 0
+        fi
       else
         run_check "PHP[$d]: composer install (dry-run)" bash -c "$CC install --dry-run --no-interaction"
       fi
