@@ -14,6 +14,9 @@
 #   --no-fix        Do not run auto-fixers (phpcbf / eslint --fix / ruff --fix);
 #                   report only.
 #   --no-build      Skip the SilverStripe `sake dev/build` step.
+#   --strict-build  Treat a failing `sake dev/build` as FAIL (default: WARN).
+#   --fresh-deps    Force a real `composer install` even when vendor/ exists
+#                   (mirrors GHA's clean-install behaviour; slower, mutates vendor/).
 #   --with-behat    Also run Behat (behat.yml) — opt-in; needs a browser/driver.
 #   --dry-run       Detect checks and print what WOULD run; execute nothing.
 #   -h, --help      Show this help.
@@ -22,8 +25,9 @@
 #           common sub-package dirs frontend/ client/ backend/ app/ if present).
 #
 # Execution context: when a project has .ddev/config.yaml, PHP checks run via
-# `ddev exec`. JS and Python checks always run on the host (DDEV containers
-# rarely carry the node/python toolchain). Override host vs ddev is automatic.
+# `ddev exec` and composer via `ddev composer`. JS and Python checks always run
+# on the host (DDEV containers rarely carry the node/python toolchain).
+# Override host vs ddev is automatic.
 #
 # Exit code: non-zero if any check FAILed.
 
@@ -32,19 +36,23 @@ set -uo pipefail
 # ----- options -----------------------------------------------------------
 DO_FIX=1
 DO_BUILD=1
+STRICT_BUILD=0
+FRESH_DEPS=0
 WITH_BEHAT=0
 DRY=0
 DIRS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --no-fix)     DO_FIX=0 ;;
-    --no-build)   DO_BUILD=0 ;;
-    --with-behat) WITH_BEHAT=1 ;;
-    --dry-run)    DRY=1 ;;
-    -h|--help)    sed -n '2,40p' "$0"; exit 0 ;;
-    --*)          echo "Unknown option: $1" >&2; exit 2 ;;
-    *)            DIRS+=("$1") ;;
+    --no-fix)       DO_FIX=0 ;;
+    --no-build)     DO_BUILD=0 ;;
+    --strict-build) STRICT_BUILD=1 ;;
+    --fresh-deps)   FRESH_DEPS=1 ;;
+    --with-behat)   WITH_BEHAT=1 ;;
+    --dry-run)      DRY=1 ;;
+    -h|--help)      sed -n '2,33p' "$0"; exit 0 ;;
+    --*)            echo "Unknown option: $1" >&2; exit 2 ;;
+    *)              DIRS+=("$1") ;;
   esac
   shift
 done
@@ -112,6 +120,17 @@ php_prefix() { # dir
   fi
 }
 
+# Under DDEV, use "ddev composer" — it handles container mounts / mutagen sync correctly.
+composer_cmd() { # dir
+  if [ -n "$(php_prefix "$1")" ]; then
+    echo "ddev composer"
+  elif command -v composer >/dev/null 2>&1; then
+    echo "composer"
+  else
+    echo ""
+  fi
+}
+
 first_existing() { for f in "$@"; do [ -f "$f" ] && { echo "$f"; return 0; }; done; return 1; }
 
 # ===== PHP / SilverStripe ================================================
@@ -119,14 +138,40 @@ php_checks() { # dir
   local d="$1"
   ( cd "$d" || return 0
     [ -f composer.json ] || return 0
-    if [ ! -d vendor ]; then
-      record WARN "PHP[$d]: vendor/ missing — run composer install"
-      return 0
+
+    # --- composer: validate + install ------------------------------------
+    local CC; CC="$(composer_cmd .)"
+    if [ -z "$CC" ]; then
+      record SKIP "PHP[$d]: composer (no composer binary found)"
+      [ -d vendor ] || { record WARN "PHP[$d]: vendor/ missing — install dependencies first"; return 0; }
+    else
+      # Manifest + lock consistency (out-of-sync lock, malformed json).
+      # --no-check-publish avoids spurious failures on private modules missing
+      # name/license publish metadata while still enforcing lock consistency.
+      run_check "PHP[$d]: composer validate" bash -c "$CC validate --strict --no-check-publish"
+
+      if [ "$FRESH_DEPS" -eq 1 ] || [ ! -d vendor ]; then
+        hdr "PHP[$d]: composer install"
+        if [ "$DRY" -eq 1 ]; then
+          printf '   \033[90m[dry-run] %s\033[0m\n' "$CC install --no-interaction --prefer-dist"
+          record PLAN "PHP[$d]: composer install"
+        elif bash -c "$CC install --no-interaction --prefer-dist"; then
+          record PASS "PHP[$d]: composer install"
+        else
+          record FAIL "PHP[$d]: composer install"
+          return 0
+        fi
+      else
+        run_check "PHP[$d]: composer install (dry-run)" bash -c "$CC install --dry-run --no-interaction"
+      fi
     fi
+
     local PRE; PRE="$(php_prefix .)"
     run() { if [ -n "$PRE" ]; then X $PRE "$@"; else X "$@"; fi; }
 
-    # dev/build (SilverStripe) — needed before phpunit; WARN (not FAIL) on error
+    # --- dev/build (SilverStripe) ----------------------------------------
+    # Runs before phpunit so the ORM is built. Failure is WARN by default
+    # (phpunit can sometimes self-bootstrap); use --strict-build for a hard gate.
     if [ "$DO_BUILD" -eq 1 ] && [ -x vendor/bin/sake ]; then
       hdr "PHP[$d]: sake dev/build"
       if [ "$DRY" -eq 1 ]; then
@@ -134,6 +179,8 @@ php_checks() { # dir
         record PLAN "PHP[$d]: dev/build"
       elif run vendor/bin/sake dev/build flush=1; then
         record PASS "PHP[$d]: dev/build"
+      elif [ "$STRICT_BUILD" -eq 1 ]; then
+        record FAIL "PHP[$d]: dev/build"
       else
         record WARN "PHP[$d]: dev/build (continuing — phpunit may self-bootstrap)"
       fi
