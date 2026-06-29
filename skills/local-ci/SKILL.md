@@ -56,6 +56,8 @@ Options:
 
 When a project has `.ddev/config.yaml`, **PHP** checks run via `ddev exec` (matches the SilverStripe + DDEV conventions). **JS and Python** checks always run on the host — DDEV web containers rarely carry the node/python toolchain. No flag needed; detection is automatic.
 
+> **Note:** PHP-under-DDEV is supported at **project root**. `ddev exec` always runs from the container's configured working directory (`/var/www/html`), so per-dir `cd` into PHP sub-packages is not propagated into the container. Run from the project root for reliable results.
+
 ## Reading the result
 
 The script ends with a `SUMMARY` block listing every check as PASS / FAIL / WARN / SKIP, then an `AUTO-FIX CHANGES` section (`git diff --stat`) showing any files a fixer mutated. Exit code is non-zero if anything FAILed.

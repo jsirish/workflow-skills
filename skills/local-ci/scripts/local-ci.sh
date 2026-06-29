@@ -194,18 +194,28 @@ js_checks() { # dir
     fi
 
     if [ ! -d node_modules ]; then
-      hdr "JS[$d]: install"
-      if [ -f package-lock.json ]; then X bash -c 'npm ci || npm install'; else X npm install; fi
+      if [ -f package-lock.json ]; then
+        run_check "JS[$d]: install" bash -c 'npm ci || npm install'
+      else
+        run_check "JS[$d]: install" npm install
+      fi
+      # If install failed, node_modules still absent — skip remaining JS checks.
+      [ -d node_modules ] || return 0
     fi
 
     # eslint auto-fix then lint
-    if has_npm_script lint || first_existing .eslintrc .eslintrc.js .eslintrc.json .eslintrc.cjs eslint.config.js eslint.config.mjs >/dev/null; then
+    local HAS_LINT_SCRIPT; has_npm_script lint && HAS_LINT_SCRIPT=1 || HAS_LINT_SCRIPT=0
+    local HAS_ESLINT_CFG; first_existing .eslintrc .eslintrc.js .eslintrc.json .eslintrc.cjs eslint.config.js eslint.config.mjs >/dev/null && HAS_ESLINT_CFG=1 || HAS_ESLINT_CFG=0
+    if [ "$HAS_LINT_SCRIPT" -eq 1 ] || [ "$HAS_ESLINT_CFG" -eq 1 ]; then
       if [ "$DO_FIX" -eq 1 ] && command -v npx >/dev/null 2>&1; then
         hdr "JS[$d]: eslint --fix"
         X bash -c 'npx --no-install eslint . --fix --no-error-on-unmatched-pattern 2>/dev/null || true'
       fi
-      if has_npm_script lint; then
+      if [ "$HAS_LINT_SCRIPT" -eq 1 ]; then
         run_check "JS[$d]: lint" npm run lint
+      elif [ "$HAS_ESLINT_CFG" -eq 1 ] && command -v npx >/dev/null 2>&1; then
+        # Flat/legacy eslint config present but no lint script — run eslint directly.
+        run_check "JS[$d]: lint (eslint)" bash -c 'npx --no-install eslint . --no-error-on-unmatched-pattern'
       fi
     fi
 
@@ -235,9 +245,14 @@ py_checks() { # dir
     [ -d tests ] && has_py=1
     [ "$has_py" -eq 1 ] || { first_existing pyproject.toml requirements.txt >/dev/null || return 0; }
 
+    # Resolve a Python interpreter for module-import fallbacks.
+    local PY=""
+    if command -v python3 >/dev/null 2>&1; then PY="python3";
+    elif command -v python >/dev/null 2>&1; then PY="python"; fi
+
     local RUFF=""
     if command -v ruff >/dev/null 2>&1; then RUFF="ruff";
-    elif python -c 'import ruff' >/dev/null 2>&1; then RUFF="python -m ruff"; fi
+    elif [ -n "$PY" ] && $PY -c 'import ruff' >/dev/null 2>&1; then RUFF="$PY -m ruff"; fi
     if [ -n "$RUFF" ]; then
       if [ "$DO_FIX" -eq 1 ]; then
         hdr "PY[$d]: ruff --fix"
@@ -249,7 +264,7 @@ py_checks() { # dir
     # pytest
     local PYTEST=""
     if command -v pytest >/dev/null 2>&1; then PYTEST="pytest";
-    elif python -c 'import pytest' >/dev/null 2>&1; then PYTEST="python -m pytest"; fi
+    elif [ -n "$PY" ] && $PY -c 'import pytest' >/dev/null 2>&1; then PYTEST="$PY -m pytest"; fi
     if [ -n "$PYTEST" ]; then
       if [ -d tests ] || compgen -G "test_*.py" >/dev/null 2>&1 || compgen -G "*_test.py" >/dev/null 2>&1; then
         run_check "PY[$d]: pytest" bash -c "$PYTEST -q"
