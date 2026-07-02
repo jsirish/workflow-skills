@@ -15,7 +15,7 @@ It is the executable counterpart to review, not a replacement. Run it, then feed
 - As the test pass alongside `/code-review` or `pr-review-toolkit` — run this first, then review with the results in hand.
 - Before `/merge-pr`, to confirm the branch is green locally.
 
-Cadence: `feature-dev` → **`local-ci`** → `/code-review` or `pr-review-toolkit` → `/merge-pr` → `/handoff`.
+Cadence: `feature-dev` → **`/local-ci`** → push → `/code-review` or `/pr-review-toolkit` → `/merge-pr` → `/handoff`.
 
 ## What it runs (gating by config presence)
 
