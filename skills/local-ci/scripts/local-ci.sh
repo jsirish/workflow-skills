@@ -50,7 +50,7 @@ while [ $# -gt 0 ]; do
     --fresh-deps)   FRESH_DEPS=1 ;;
     --with-behat)   WITH_BEHAT=1 ;;
     --dry-run)      DRY=1 ;;
-    -h|--help)      awk 'NR==1{next} /^#/{print; next} {exit}' "$0"; exit 0 ;;
+    -h|--help)      awk 'NR==1{next} /^#/{print; next} /^$/{next} {exit}' "$0"; exit 0 ;;
     --*)            echo "Unknown option: $1" >&2; exit 2 ;;
     *)              DIRS+=("$1") ;;
   esac
@@ -290,7 +290,7 @@ py_checks() { # dir
     local has_py; has_py=0
     # Recursive source detection (not just top-level): a package layout like
     # src/pkg/mod.py must still set has_py. Skips dot-dirs and dep dirs.
-    [ -n "$(find . \( -name '.?*' -o -name node_modules -o -name vendor \) -prune -o -name '*.py' -type f -print 2>/dev/null | head -1)" ] && has_py=1
+    [ -n "$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist -o -name site-packages \) -prune -o -name '*.py' -type f -print 2>/dev/null | head -1)" ] && has_py=1
     [ -d tests ] && has_py=1
     [ "$has_py" -eq 1 ] || { first_existing pyproject.toml requirements.txt >/dev/null || return 0; }
 
@@ -317,7 +317,7 @@ py_checks() { # dir
     if [ -n "$PYTEST" ]; then
       # Recursive test detection: test files may live in nested packages
       # rather than at the top level or in a tests/ dir.
-      if [ -d tests ] || [ -n "$(find . \( -name '.?*' -o -name node_modules -o -name vendor \) -prune -o \( -name 'test_*.py' -o -name '*_test.py' \) -type f -print 2>/dev/null | head -1)" ]; then
+      if [ -d tests ] || [ -n "$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist -o -name site-packages \) -prune -o \( -name 'test_*.py' -o -name '*_test.py' \) -type f -print 2>/dev/null | head -1)" ]; then
         run_check "PY[$d]: pytest" bash -c "$PYTEST -q"
       else
         record SKIP "PY[$d]: pytest (no tests found)"
@@ -327,6 +327,17 @@ py_checks() { # dir
 }
 
 # ----- run ---------------------------------------------------------------
+# Snapshot tree state so AUTO-FIX CHANGES reports only what the fixers mutated
+# during this run, not pre-existing staged/unstaged user edits.
+tree_state() {
+  { git -C "$ROOT" diff HEAD --stat 2>/dev/null || git -C "$ROOT" diff --stat 2>/dev/null; } | cksum
+}
+PRE_FIX_STATE=""
+if [ "$DO_FIX" -eq 1 ] && [ "$DRY" -eq 0 ] && command -v git >/dev/null 2>&1 \
+   && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  PRE_FIX_STATE="$(tree_state)"
+fi
+
 for d in "${DIRS[@]}"; do
   php_checks "$d"
   js_checks "$d"
@@ -350,14 +361,14 @@ else
   done < "$RESULTS_FILE"
 fi
 
-# Show any files the auto-fixers mutated
+# Show auto-fixer mutations: only when the tree state changed during the run.
+# Diff against HEAD so fixer mutations to already-staged files show up too;
+# plain `git diff` (index vs worktree) under-reports those. Fall back to the
+# plain diff on an unborn HEAD (repo with no commits yet).
 if [ "$DO_FIX" -eq 1 ] && [ "$DRY" -eq 0 ] && command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-  # Diff against HEAD so fixer mutations to already-staged files show up too;
-  # plain `git diff` (index vs worktree) under-reports those. Fall back to the
-  # plain diff on an unborn HEAD (repo with no commits yet).
-  changed="$(git -C "$ROOT" diff HEAD --stat 2>/dev/null)" || changed="$(git -C "$ROOT" diff --stat 2>/dev/null)"
-  if [ -n "$changed" ]; then
-    hdr "AUTO-FIX CHANGES (git diff HEAD --stat: staged + unstaged)"
+  if [ "$(tree_state)" != "$PRE_FIX_STATE" ]; then
+    changed="$(git -C "$ROOT" diff HEAD --stat 2>/dev/null)" || changed="$(git -C "$ROOT" diff --stat 2>/dev/null)"
+    hdr "AUTO-FIX CHANGES (tree changed during run; git diff HEAD --stat)"
     echo "$changed"
   fi
 fi
