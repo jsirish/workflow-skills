@@ -71,6 +71,26 @@ When augmenting a review:
 2. If auto-fixes changed files, review that diff — those are real edits to your working tree.
 3. Carry FAIL/WARN items into the review as concrete findings the LLM pass can then explain or contextualise.
 
+## Status marker and the git-push gate
+
+Every non-dry run writes a one-line marker to `<git-dir>/local-ci-status`:
+
+```
+sha=<HEAD-at-run> result=<PASS|FAIL|WARN|NONE> ts=<epoch>
+```
+
+`scripts/git-push-gate.sh` is a Claude Code `PreToolUse` (Bash) hook that consumes the marker and blocks `git push` when the last run FAILed, has WARNs (WARN is not a green gate), is missing, or is stale. A PASS is valid at HEAD, or at an ancestor of HEAD for 4 hours (covers the run-ci, commit, push flow). The marker is stamped per repo: a run against one repo never green-lights another, and runs where nothing executed record `NONE`, not `PASS`. Repos with no recognised check configs are never gated.
+
+The command is parsed with a shell tokenizer, not a regex, so quoted `-C` paths, paths with spaces, `git -c <cfg>` options, multiple pushes in one compound command, and strings that merely mention "git push" are handled correctly. Known fail-open cases, by design: `jq` or `python3` missing, git aliases that expand to push, and the residual `has_ci_configs` drift noted in the script header. Do not treat the gate as a security boundary; it is a workflow guard.
+
+Register it in `~/.claude/settings.json` under `hooks.PreToolUse` (matcher `Bash`):
+
+```json
+{ "type": "command", "command": "/path/to/skills/local-ci/scripts/git-push-gate.sh" }
+```
+
+Bypass for an investigated, genuinely benign case: prefix the push with `SKIP_CI_GATE=1`.
+
 ## Notes
 
 - **`composer validate` and `composer install --dry-run` run automatically** on every PHP project — these are the same checks GHA performs implicitly when building the environment. If `vendor/` is missing, a real install runs instead. Use `--fresh-deps` for a full clean-install mirror.
