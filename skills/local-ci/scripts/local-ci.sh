@@ -359,17 +359,25 @@ fi
 # Records this run so a PreToolUse hook can verify "local-ci ran at this HEAD
 # and did not fail" before allowing `git push`. See scripts/git-push-gate.sh.
 # Format: one line — sha=<HEAD> result=<PASS|FAIL|WARN|NONE> ts=<epoch>
-if [ "$DRY" -eq 0 ] && command -v git >/dev/null 2>&1 \
-   && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-  MARKER_DIR="$(git -C "$ROOT" rev-parse --absolute-git-dir 2>/dev/null)"
-  MARKER_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo none)"
+# Stamps every distinct repo among the scanned DIRS (not $(pwd): an explicit
+# DIR arg may point at a different repo than the invocation cwd). A run in
+# which nothing actually executed (all SKIP, or nothing found) records NONE
+# rather than certifying a PASS.
+if [ "$DRY" -eq 0 ] && command -v git >/dev/null 2>&1; then
   MARKER_RESULT=PASS
   if [ "$FAILED" -ne 0 ]; then MARKER_RESULT=FAIL
   elif grep -q '^WARN' "$RESULTS_FILE" 2>/dev/null; then MARKER_RESULT=WARN
-  elif [ ! -s "$RESULTS_FILE" ]; then MARKER_RESULT=NONE
+  elif ! grep -qE '^(PASS|FAIL|WARN)' "$RESULTS_FILE" 2>/dev/null; then MARKER_RESULT=NONE
   fi
-  [ -n "$MARKER_DIR" ] && printf 'sha=%s result=%s ts=%s\n' \
-    "$MARKER_SHA" "$MARKER_RESULT" "$(date +%s)" > "$MARKER_DIR/local-ci-status" 2>/dev/null || true
+  SEEN_GITDIRS=" "
+  for d in "${DIRS[@]}"; do
+    MARKER_DIR="$(git -C "$d" rev-parse --absolute-git-dir 2>/dev/null)" || continue
+    case "$SEEN_GITDIRS" in *" $MARKER_DIR "*) continue ;; esac
+    SEEN_GITDIRS="$SEEN_GITDIRS$MARKER_DIR "
+    MARKER_SHA="$(git -C "$d" rev-parse HEAD 2>/dev/null || echo none)"
+    printf 'sha=%s result=%s ts=%s\n' \
+      "$MARKER_SHA" "$MARKER_RESULT" "$(date +%s)" > "$MARKER_DIR/local-ci-status" 2>/dev/null || true
+  done
 fi
 
 echo
