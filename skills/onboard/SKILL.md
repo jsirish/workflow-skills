@@ -1,6 +1,6 @@
 ---
 name: onboard
-description: Bootstrap agent context at the start of a new session. Reads project state, checks environment, and aligns on goals. Portable no-plugin fallback: if the throughline plugin is active, use throughline-onboard instead.
+description: "Bootstrap agent context at the start of a new session. Reads project state, checks environment, and aligns on goals. Portable no-plugin fallback: if the throughline plugin is active, use throughline-onboard instead."
 ---
 
 # Skill: Onboard
@@ -13,7 +13,7 @@ description: Bootstrap agent context at the start of a new session. Reads projec
 
 ## Relationship to throughline
 
-This skill is the portable, no-plugin fallback for harnesses without the throughline plugin (opencode and other agent harnesses). If throughline is active in this session (the `throughline-onboard` skill is available, or a capture buffer exists at `.agent/handoff/buffer/`), defer to `throughline-onboard` instead: it reads the same `HANDOFF.md` plus the hook-driven capture buffer for deeper orientation. Both operate on the same `.agent/handoff/` state, so switching between harnesses is safe.
+This skill is the portable, no-plugin fallback for harnesses without the throughline plugin (opencode and other agent harnesses). If throughline is active in this session (the `throughline-onboard` skill is available, or a capture buffer exists at `.claude/throughline/buffer/`, or at `.agent/handoff/buffer/` when `THROUGHLINE_DATA_DIR=.agent/handoff` is set), defer to `throughline-onboard` instead: it reads the same `HANDOFF.md` plus the hook-driven capture buffer for deeper orientation. With `THROUGHLINE_DATA_DIR=.agent/handoff`, both operate on the same `.agent/handoff/` state, so switching between harnesses is safe.
 
 ---
 

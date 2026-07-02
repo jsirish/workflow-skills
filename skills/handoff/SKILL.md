@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Updates the master HANDOFF.md with distilled knowledge and creates a timestamped session log. Run ONLY when explicitly invoked by the user via /handoff. Portable no-plugin fallback: if the throughline plugin is active, use throughline-handoff instead.
+description: "Updates the master HANDOFF.md with distilled knowledge and creates a timestamped session log. Run ONLY when explicitly invoked by the user via /handoff. Portable no-plugin fallback: if the throughline plugin is active, use throughline-handoff instead."
 ---
 
 # Skill: Handoff
@@ -14,7 +14,7 @@ description: Updates the master HANDOFF.md with distilled knowledge and creates 
 
 ## Relationship to throughline
 
-This skill is the portable, no-plugin fallback for harnesses without the throughline plugin (opencode and other agent harnesses). If throughline is active in this session (the `throughline-handoff` skill is available, or a capture buffer exists at `.agent/handoff/buffer/`), defer to `throughline-handoff` instead: it distills the session from the hook-driven capture buffer rather than from context recall. Both write the same `HANDOFF.md` and session logs, so switching between harnesses is safe.
+This skill is the portable, no-plugin fallback for harnesses without the throughline plugin (opencode and other agent harnesses). If throughline is active in this session (the `throughline-handoff` skill is available, or a capture buffer exists at `.claude/throughline/buffer/`, or at `.agent/handoff/buffer/` when `THROUGHLINE_DATA_DIR=.agent/handoff` is set), defer to `throughline-handoff` instead: it distills the session from the hook-driven capture buffer rather than from context recall. With the shared data dir both write the same `HANDOFF.md`; note the session-log paths differ (throughline logs to `<data-dir>/logs/`, this skill to `.agent/handoffs/`), so pick one harness per session for log continuity.
 
 ---
 
