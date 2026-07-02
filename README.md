@@ -23,6 +23,8 @@ npx skills add jsirish/workflow-skills
 | `ddev-sync` | Start DDEV, sync the remote database and assets to local, and run the framework build step |
 | `server-sync` | Pull databases and assets from a remote server to the local DDEV environment using sync.sh |
 | `server-deploy` | Push local databases and assets to a remote pre-prod or staging server using deploy.sh |
+| `dhq-deploy` | Deploy a project to production using the DeployHQ CLI (dhq) |
+| `local-ci` | Run the executable test/lint layer locally (PHPUnit, PHPCS, PHPStan, npm, ruff/pytest) with auto-fix, a status marker, and a git-push gate hook |
 | `visual-regression-upgrade` | Capture full-page screenshots of two environments and produce a pixel-diff HTML report to verify visual parity |
 
 ## Installation
