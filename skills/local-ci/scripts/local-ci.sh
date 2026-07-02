@@ -355,6 +355,23 @@ if [ "$DO_FIX" -eq 1 ] && [ "$DRY" -eq 0 ] && command -v git >/dev/null 2>&1 && 
   fi
 fi
 
+# ----- status marker (consumed by the git-push gate hook) ----------------
+# Records this run so a PreToolUse hook can verify "local-ci ran at this HEAD
+# and did not fail" before allowing `git push`. See scripts/git-push-gate.sh.
+# Format: one line — sha=<HEAD> result=<PASS|FAIL|WARN|NONE> ts=<epoch>
+if [ "$DRY" -eq 0 ] && command -v git >/dev/null 2>&1 \
+   && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  MARKER_DIR="$(git -C "$ROOT" rev-parse --absolute-git-dir 2>/dev/null)"
+  MARKER_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo none)"
+  MARKER_RESULT=PASS
+  if [ "$FAILED" -ne 0 ]; then MARKER_RESULT=FAIL
+  elif grep -q '^WARN' "$RESULTS_FILE" 2>/dev/null; then MARKER_RESULT=WARN
+  elif [ ! -s "$RESULTS_FILE" ]; then MARKER_RESULT=NONE
+  fi
+  [ -n "$MARKER_DIR" ] && printf 'sha=%s result=%s ts=%s\n' \
+    "$MARKER_SHA" "$MARKER_RESULT" "$(date +%s)" > "$MARKER_DIR/local-ci-status" 2>/dev/null || true
+fi
+
 echo
 if [ "$DRY" -eq 1 ]; then
   echo "Result: dry-run — listed planned checks, executed nothing."
