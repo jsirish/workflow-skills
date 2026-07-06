@@ -94,7 +94,7 @@ Bypass for an investigated, genuinely benign case: prefix the push with `SKIP_CI
 ## Notes
 
 - **`composer validate` and `composer install --dry-run` run automatically** on every PHP project — these are the same checks GHA performs implicitly when building the environment. If `vendor/` is missing, a real install runs instead. Use `--fresh-deps` for a full clean-install mirror.
-- `composer validate` runs with `--strict`, which also surfaces recommendation-level warnings (loose version constraints, a stray `version` field, etc.), not just real problems (malformed json, out-of-sync lock). Those warnings are cosmetic and common, so a failure here records WARN, not FAIL — it won't gate the run's exit code, but WARN still blocks `git push` via the push gate until investigated (see below).
+- `composer validate` runs with `--strict`, which also surfaces recommendation-level warnings (loose version constraints, a stray `version` field, etc.), not just real problems (malformed json, out-of-sync lock) — and both share the same non-zero exit code. If `--strict` fails, the script re-checks with a plain (non-strict) `composer validate`: still non-zero means a genuine problem and stays a hard FAIL; exit 0 means the only issue was a --strict-only warning, which records WARN instead. WARN still blocks `git push` via the push gate until investigated (see below).
 - `dev/build` failure is WARN by default because phpunit can sometimes self-bootstrap from its own bootstrap file. Pass `--strict-build` to make it a hard gate.
 - The script never commits. Auto-fixes are left in the working tree for you to review and commit.
 - A project with no recognised configs reports "nothing to run" rather than erroring.

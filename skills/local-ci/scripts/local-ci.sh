@@ -147,18 +147,24 @@ php_checks() { # dir
     else
       # Manifest + lock consistency. --strict surfaces recommendation-level
       # warnings (loose version constraints, a stray `version` field, etc.)
-      # as well as real problems (malformed json, out-of-sync lock). The
-      # warnings are cosmetic and common across projects, so a failure here
-      # is WARN, not a hard gate. --no-check-publish avoids spurious noise
-      # on private modules missing name/license publish metadata.
+      # on top of real problems (malformed json, out-of-sync lock) — and
+      # both share the same non-zero exit code, so a --strict failure alone
+      # can't tell them apart. If --strict fails, re-check without it: a
+      # plain `composer validate` still exits non-zero for real corruption
+      # but exits 0 when the only issue was a --strict-only warning. That
+      # lets a genuine error stay a hard FAIL while cosmetic warnings WARN.
+      # --no-check-publish avoids spurious noise on private modules missing
+      # name/license publish metadata.
       hdr "PHP[$d]: composer validate"
       if [ "$DRY" -eq 1 ]; then
         printf '   \033[90m[dry-run] %s\033[0m\n' "$CC validate --strict --no-check-publish"
         record PLAN "PHP[$d]: composer validate"
       elif bash -c "$CC validate --strict --no-check-publish"; then
         record PASS "PHP[$d]: composer validate"
-      else
+      elif bash -c "$CC validate --no-check-publish" >/dev/null 2>&1; then
         record WARN "PHP[$d]: composer validate (strict warnings — not gating)"
+      else
+        record FAIL "PHP[$d]: composer validate"
       fi
 
       if [ "$FRESH_DEPS" -eq 1 ] || [ ! -d vendor ]; then
