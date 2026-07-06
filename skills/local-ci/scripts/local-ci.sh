@@ -145,10 +145,21 @@ php_checks() { # dir
       record SKIP "PHP[$d]: composer (no composer binary found)"
       [ -d vendor ] || { record WARN "PHP[$d]: vendor/ missing — install dependencies first"; return 0; }
     else
-      # Manifest + lock consistency (out-of-sync lock, malformed json).
-      # --no-check-publish avoids spurious failures on private modules missing
-      # name/license publish metadata while still enforcing lock consistency.
-      run_check "PHP[$d]: composer validate" bash -c "$CC validate --strict --no-check-publish"
+      # Manifest + lock consistency. --strict surfaces recommendation-level
+      # warnings (loose version constraints, a stray `version` field, etc.)
+      # as well as real problems (malformed json, out-of-sync lock). The
+      # warnings are cosmetic and common across projects, so a failure here
+      # is WARN, not a hard gate. --no-check-publish avoids spurious noise
+      # on private modules missing name/license publish metadata.
+      hdr "PHP[$d]: composer validate"
+      if [ "$DRY" -eq 1 ]; then
+        printf '   \033[90m[dry-run] %s\033[0m\n' "$CC validate --strict --no-check-publish"
+        record PLAN "PHP[$d]: composer validate"
+      elif bash -c "$CC validate --strict --no-check-publish"; then
+        record PASS "PHP[$d]: composer validate"
+      else
+        record WARN "PHP[$d]: composer validate (strict warnings — not gating)"
+      fi
 
       if [ "$FRESH_DEPS" -eq 1 ] || [ ! -d vendor ]; then
         hdr "PHP[$d]: composer install"

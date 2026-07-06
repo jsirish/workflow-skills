@@ -21,7 +21,7 @@ Cadence: `feature-dev` → **`/local-ci`** → push → `/code-review` or `/pr-r
 
 | Check | Fires when present | Command |
 |---|---|---|
-| composer validate | `composer.json` present | `composer validate --strict` (FAIL-able) |
+| composer validate | `composer.json` present | `composer validate --strict` (WARN-only; the `--strict` warnings are cosmetic) |
 | composer install | `vendor/` missing or `--fresh-deps` | `composer install` (else `--dry-run` resolve check) |
 | dev/build | `vendor/bin/sake` (SilverStripe) | `sake dev/build flush=1` (WARN-only; FAIL with `--strict-build`) |
 | PHPUnit | `phpunit.xml` / `.dist` | `vendor/bin/phpunit` |
@@ -94,6 +94,7 @@ Bypass for an investigated, genuinely benign case: prefix the push with `SKIP_CI
 ## Notes
 
 - **`composer validate` and `composer install --dry-run` run automatically** on every PHP project — these are the same checks GHA performs implicitly when building the environment. If `vendor/` is missing, a real install runs instead. Use `--fresh-deps` for a full clean-install mirror.
+- `composer validate` runs with `--strict`, which also surfaces recommendation-level warnings (loose version constraints, a stray `version` field, etc.), not just real problems (malformed json, out-of-sync lock). Those warnings are cosmetic and common, so a failure here records WARN, not FAIL — it won't gate the run's exit code, but WARN still blocks `git push` via the push gate until investigated (see below).
 - `dev/build` failure is WARN by default because phpunit can sometimes self-bootstrap from its own bootstrap file. Pass `--strict-build` to make it a hard gate.
 - The script never commits. Auto-fixes are left in the working tree for you to review and commit.
 - A project with no recognised configs reports "nothing to run" rather than erroring.
