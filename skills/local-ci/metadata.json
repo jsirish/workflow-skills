@@ -1,6 +1,6 @@
 {
   "author": "jsirish",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "name": "local-ci",
   "description": "Run the executable test/lint layer locally — PHPUnit, PHPCS, PHPStan, npm lint/build/test, and Python ruff/pytest — auto-fixing where a fixer exists, then reporting pass/fail. Augments LLM code review, which never runs tests. Use when asked to run ci, run the tests, check before a PR, or verify a change before review or merge."
 }

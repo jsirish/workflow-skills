@@ -316,10 +316,24 @@ py_checks() { # dir
     if command -v python3 >/dev/null 2>&1; then PY="python3";
     elif command -v python >/dev/null 2>&1; then PY="python"; fi
 
+    # ruff — gated on adoption, like phpcs/phpstan, not mere availability.
+    # A global ruff install otherwise fires on every Python repo local-ci
+    # touches, producing false FAILs (and sweeping --fix rewrites) on
+    # projects that never opted in. Adoption evidence: a [tool.ruff]
+    # section in pyproject.toml, or a ruff.toml/.ruff.toml file.
+    local ruff_adopted=0
+    if first_existing ruff.toml .ruff.toml >/dev/null; then
+      ruff_adopted=1
+    elif [ -f pyproject.toml ] && grep -q '^\[tool\.ruff' pyproject.toml; then
+      ruff_adopted=1
+    fi
+
     local RUFF=""
     if command -v ruff >/dev/null 2>&1; then RUFF="ruff";
     elif [ -n "$PY" ] && $PY -c 'import ruff' >/dev/null 2>&1; then RUFF="$PY -m ruff"; fi
-    if [ -n "$RUFF" ]; then
+    if [ -n "$RUFF" ] && [ "$ruff_adopted" -eq 0 ]; then
+      record SKIP "PY[$d]: ruff (no ruff config — project has not adopted ruff)"
+    elif [ -n "$RUFF" ]; then
       if [ "$DO_FIX" -eq 1 ]; then
         hdr "PY[$d]: ruff --fix"
         X bash -c "$RUFF check --fix . || true"
