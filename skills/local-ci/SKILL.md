@@ -30,7 +30,7 @@ Cadence: `feature-dev` → **`/local-ci`** → push → `/code-review` or `/pr-r
 | JS lint | `package.json` lint script or eslint config | `eslint --fix` → `npm run lint` |
 | JS build | `package.json` build script | `npm run build` |
 | JS test | `package.json` test script | `npm test` (npm placeholder script is skipped) |
-| Python lint | `[tool.ruff]` in `pyproject.toml`, or `ruff.toml`/`.ruff.toml` | `ruff check --fix` → `ruff check` |
+| Python lint | `[tool.ruff]` in `pyproject.toml`, `ruff.toml`/`.ruff.toml`, or a ruff hook in `.pre-commit-config.yaml` | `ruff check --fix` → `ruff check` |
 | Python test | pytest available + tests present | `pytest -q` with cwd forced onto `PYTHONPATH` (no tests → SKIP, not FAIL) |
 | Behat | `behat.yml` | **opt-in** via `--with-behat` (needs a browser/driver) |
 

@@ -320,11 +320,15 @@ py_checks() { # dir
     # A global ruff install otherwise fires on every Python repo local-ci
     # touches, producing false FAILs (and sweeping --fix rewrites) on
     # projects that never opted in. Adoption evidence: a [tool.ruff]
-    # section in pyproject.toml, or a ruff.toml/.ruff.toml file.
+    # section in pyproject.toml, a ruff.toml/.ruff.toml file, or a
+    # ruff pre-commit hook (projects that lint via pre-commit alone,
+    # relying on ruff's defaults, carry no other ruff config file).
     local ruff_adopted=0
     if first_existing ruff.toml .ruff.toml >/dev/null; then
       ruff_adopted=1
     elif [ -f pyproject.toml ] && grep -q '^\[tool\.ruff' pyproject.toml; then
+      ruff_adopted=1
+    elif [ -f .pre-commit-config.yaml ] && grep -qE 'ruff-pre-commit|/ruff$' .pre-commit-config.yaml; then
       ruff_adopted=1
     fi
 
