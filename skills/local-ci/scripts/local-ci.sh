@@ -327,9 +327,14 @@ py_checks() { # dir
       run_check "PY[$d]: ruff" bash -c "$RUFF check ."
     fi
 
-    # pytest
+    # pytest — keep preferring a `pytest` already on PATH (it's the one tied to
+    # an active venv/project env, with the right plugins/deps) over a separately
+    # resolved $PY, which may belong to a different environment entirely. Either
+    # way, force cwd onto PYTHONPATH: the bare console script does not add cwd to
+    # sys.path (only `python -m pytest` does that natively), so suites that import
+    # top-level modules by cwd would otherwise false-FAIL with ModuleNotFoundError.
     local PYTEST=""
-    if command -v pytest >/dev/null 2>&1; then PYTEST="pytest";
+    if command -v pytest >/dev/null 2>&1; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" pytest";
     elif [ -n "$PY" ] && $PY -c 'import pytest' >/dev/null 2>&1; then PYTEST="$PY -m pytest"; fi
     if [ -n "$PYTEST" ]; then
       # Recursive test detection: test files may live in nested packages

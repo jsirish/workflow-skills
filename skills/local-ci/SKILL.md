@@ -31,7 +31,7 @@ Cadence: `feature-dev` → **`/local-ci`** → push → `/code-review` or `/pr-r
 | JS build | `package.json` build script | `npm run build` |
 | JS test | `package.json` test script | `npm test` (npm placeholder script is skipped) |
 | Python lint | ruff available + Python project | `ruff check --fix` → `ruff check` |
-| Python test | pytest available + tests present | `pytest -q` (no tests → SKIP, not FAIL) |
+| Python test | pytest available + tests present | `pytest -q` with cwd forced onto `PYTHONPATH` (no tests → SKIP, not FAIL) |
 | Behat | `behat.yml` | **opt-in** via `--with-behat` (needs a browser/driver) |
 
 The legacy `phpmd` / `phploc` / `pdepend` / `phpdox` tools some old `tests.sh` scripts ran are intentionally **not** included — no project CI actually runs them.
