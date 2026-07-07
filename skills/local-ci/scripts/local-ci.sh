@@ -327,10 +327,14 @@ py_checks() { # dir
       run_check "PY[$d]: ruff" bash -c "$RUFF check ."
     fi
 
-    # pytest
+    # pytest — prefer `python -m pytest` over the bare console script: the `-m`
+    # form prepends cwd to sys.path (as most projects document), so suites that
+    # import top-level modules by cwd don't false-FAIL with ModuleNotFoundError.
+    # Fall back to the console script (with cwd forced onto PYTHONPATH) only when
+    # pytest isn't importable by $PY.
     local PYTEST=""
-    if command -v pytest >/dev/null 2>&1; then PYTEST="pytest";
-    elif [ -n "$PY" ] && $PY -c 'import pytest' >/dev/null 2>&1; then PYTEST="$PY -m pytest"; fi
+    if [ -n "$PY" ] && $PY -c 'import pytest' >/dev/null 2>&1; then PYTEST="$PY -m pytest";
+    elif command -v pytest >/dev/null 2>&1; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" pytest"; fi
     if [ -n "$PYTEST" ]; then
       # Recursive test detection: test files may live in nested packages
       # rather than at the top level or in a tests/ dir.
