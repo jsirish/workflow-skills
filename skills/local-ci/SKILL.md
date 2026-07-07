@@ -24,9 +24,9 @@ Cadence: `feature-dev` → **`/local-ci`** → push → `/code-review` or `/pr-r
 | composer validate | `composer.json` present | `composer validate --strict` (WARN-only; the `--strict` warnings are cosmetic) |
 | composer install | `vendor/` missing or `--fresh-deps` | `composer install` (else `--dry-run` resolve check) |
 | dev/build | `vendor/bin/sake` (SilverStripe) | `sake dev/build flush=1` (WARN-only; FAIL with `--strict-build`) |
-| PHPUnit | `phpunit.xml` / `.dist` | `vendor/bin/phpunit` |
-| PHPCS | `phpcs.xml` / `.dist` | `phpcbf` (auto-fix) → `phpcs --standard=…` |
-| PHPStan | `phpstan.neon` / `.dist` | `vendor/bin/phpstan analyse` |
+| PHPUnit | `phpunit.xml` / `.dist` | `vendor/bin/phpunit` (config present but binary missing → WARN, not silently skipped) |
+| PHPCS | `phpcs.xml` / `.dist` | `phpcbf` (auto-fix) → `phpcs --standard=…` (config present but binary missing → WARN, not silently skipped) |
+| PHPStan | `phpstan.neon` / `.dist` | `vendor/bin/phpstan analyse` (config present but binary missing → WARN, not silently skipped) |
 | JS lint | `package.json` lint script or eslint config | `eslint --fix` → `npm run lint` |
 | JS build | `package.json` build script | `npm run build` |
 | JS test | `package.json` test script | `npm test` (npm placeholder script is skipped) |
