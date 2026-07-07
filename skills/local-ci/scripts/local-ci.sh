@@ -303,7 +303,7 @@ js_checks() { # dir
 py_checks() { # dir
   local d="$1"
   ( cd "$d" || return 0
-    first_existing pyproject.toml requirements.txt pytest.ini tox.ini setup.cfg >/dev/null || return 0
+    first_existing pyproject.toml requirements.txt pytest.ini tox.ini setup.cfg ruff.toml .ruff.toml >/dev/null || return 0
     local has_py; has_py=0
     # Recursive source detection (not just top-level): a package layout like
     # src/pkg/mod.py must still set has_py. Skips dot-dirs and dep dirs.
@@ -316,15 +316,35 @@ py_checks() { # dir
     if command -v python3 >/dev/null 2>&1; then PY="python3";
     elif command -v python >/dev/null 2>&1; then PY="python"; fi
 
+    # ruff — gated on adoption, like phpcs/phpstan, not mere availability.
+    # A global ruff install otherwise fires on every Python repo local-ci
+    # touches, producing false FAILs (and sweeping --fix rewrites) on
+    # projects that never opted in. Adoption evidence: a [tool.ruff]
+    # section in pyproject.toml, a ruff.toml/.ruff.toml file, or a
+    # ruff pre-commit hook (projects that lint via pre-commit alone,
+    # relying on ruff's defaults, carry no other ruff config file).
+    local ruff_adopted=0
+    if first_existing ruff.toml .ruff.toml >/dev/null; then
+      ruff_adopted=1
+    elif [ -f pyproject.toml ] && grep -q '^\[tool\.ruff' pyproject.toml; then
+      ruff_adopted=1
+    elif [ -f .pre-commit-config.yaml ] && grep -qE 'ruff-pre-commit|/ruff$' .pre-commit-config.yaml; then
+      ruff_adopted=1
+    fi
+
     local RUFF=""
     if command -v ruff >/dev/null 2>&1; then RUFF="ruff";
     elif [ -n "$PY" ] && $PY -c 'import ruff' >/dev/null 2>&1; then RUFF="$PY -m ruff"; fi
-    if [ -n "$RUFF" ]; then
+    if [ -n "$RUFF" ] && [ "$ruff_adopted" -eq 0 ]; then
+      record SKIP "PY[$d]: ruff (no ruff config — project has not adopted ruff)"
+    elif [ -n "$RUFF" ]; then
       if [ "$DO_FIX" -eq 1 ]; then
         hdr "PY[$d]: ruff --fix"
         X bash -c "$RUFF check --fix . || true"
       fi
       run_check "PY[$d]: ruff" bash -c "$RUFF check ."
+    elif [ "$ruff_adopted" -eq 1 ]; then
+      record WARN "PY[$d]: ruff (adopted via config but ruff is not installed)"
     fi
 
     # pytest — keep preferring a `pytest` already on PATH (it's the one tied to
