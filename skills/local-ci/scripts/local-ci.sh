@@ -204,9 +204,14 @@ php_checks() { # dir
     fi
 
     # PHPUnit
-    if first_existing phpunit.xml phpunit.xml.dist >/dev/null && [ -x vendor/bin/phpunit ]; then
+    # The "config present but vendor/bin/X missing" WARN below requires
+    # vendor/ to actually exist — under --dry-run against a fresh checkout,
+    # composer install is only planned (not run), so vendor/'s absence there
+    # reflects the skipped install, not a real missing-binary problem.
+    local unit_cfg; unit_cfg="$(first_existing phpunit.xml phpunit.xml.dist || true)"
+    if [ -n "$unit_cfg" ] && [ -x vendor/bin/phpunit ]; then
       run_check "PHP[$d]: phpunit" bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/phpunit --colors=always; else vendor/bin/phpunit --colors=always; fi'
-    elif first_existing phpunit.xml phpunit.xml.dist >/dev/null; then
+    elif [ -n "$unit_cfg" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpunit (adopted via config but vendor/bin/phpunit missing)"
     fi
 
@@ -227,14 +232,15 @@ php_checks() { # dir
       run_check "PHP[$d]: phpcs" bash -c '
         if [ -n "'"$PRE"'" ]; then R="'"$PRE"' "; else R=""; fi
         $R vendor/bin/phpcs -s --report=summary --standard="'"$std"'" --extensions=php,inc --ignore=autoload.php --ignore=vendor/ '"$paths"''
-    elif [ -n "$std" ]; then
+    elif [ -n "$std" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpcs (adopted via $std but vendor/bin/phpcs missing)"
     fi
 
     # PHPStan
-    if first_existing phpstan.neon phpstan.neon.dist >/dev/null && [ -x vendor/bin/phpstan ]; then
+    local stan_cfg; stan_cfg="$(first_existing phpstan.neon phpstan.neon.dist || true)"
+    if [ -n "$stan_cfg" ] && [ -x vendor/bin/phpstan ]; then
       run_check "PHP[$d]: phpstan" bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/phpstan analyse --no-progress; else vendor/bin/phpstan analyse --no-progress; fi'
-    elif first_existing phpstan.neon phpstan.neon.dist >/dev/null; then
+    elif [ -n "$stan_cfg" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpstan (adopted via config but vendor/bin/phpstan missing)"
     fi
 
