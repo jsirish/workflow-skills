@@ -303,7 +303,7 @@ js_checks() { # dir
 py_checks() { # dir
   local d="$1"
   ( cd "$d" || return 0
-    first_existing pyproject.toml requirements.txt pytest.ini tox.ini setup.cfg >/dev/null || return 0
+    first_existing pyproject.toml requirements.txt pytest.ini tox.ini setup.cfg ruff.toml .ruff.toml >/dev/null || return 0
     local has_py; has_py=0
     # Recursive source detection (not just top-level): a package layout like
     # src/pkg/mod.py must still set has_py. Skips dot-dirs and dep dirs.
