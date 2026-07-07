@@ -339,6 +339,8 @@ py_checks() { # dir
         X bash -c "$RUFF check --fix . || true"
       fi
       run_check "PY[$d]: ruff" bash -c "$RUFF check ."
+    elif [ "$ruff_adopted" -eq 1 ]; then
+      record WARN "PY[$d]: ruff (adopted via config but ruff is not installed)"
     fi
 
     # pytest — keep preferring a `pytest` already on PATH (it's the one tied to
