@@ -5,21 +5,24 @@
 # Detects which check configs a project has and runs the matching checks,
 # auto-fixing where a fixer exists (then re-checking), and prints a pass/fail
 # summary. Mirrors the canonical silverstripe/gha-ci set (phpunit, phpcs,
-# phpstan) plus npm scripts and Python (ruff, pytest).
+# phpstan) plus npm scripts, Python (ruff, pytest), shell scripts (shellcheck),
+# and project-declared custom checks (.local-ci.json).
 #
 # Usage:
 #   local-ci.sh [options] [DIR ...]
 #
 # Options:
-#   --no-fix        Do not run auto-fixers (phpcbf / eslint --fix / ruff --fix);
-#                   report only.
-#   --no-build      Skip the SilverStripe `sake dev/build` step.
-#   --strict-build  Treat a failing `sake dev/build` as FAIL (default: WARN).
-#   --fresh-deps    Force a real `composer install` even when vendor/ exists
-#                   (mirrors GHA's clean-install behaviour; slower, mutates vendor/).
-#   --with-behat    Also run Behat (behat.yml) — opt-in; needs a browser/driver.
-#   --dry-run       Detect checks and print what WOULD run; execute nothing.
-#   -h, --help      Show this help.
+#   --no-fix           Do not run auto-fixers (phpcbf / eslint --fix / ruff --fix);
+#                      report only.
+#   --no-build         Skip the SilverStripe `sake dev/build` step.
+#   --strict-build     Treat a failing `sake dev/build` as FAIL (default: WARN).
+#   --fresh-deps       Force a real `composer install` even when vendor/ exists
+#                      (mirrors GHA's clean-install behaviour; slower, mutates vendor/).
+#   --with-behat       Also run Behat (behat.yml) — opt-in; needs a browser/driver.
+#   --with-shellcheck  Force shellcheck even without a .shellcheckrc or a
+#                      shell-only project layout — opt-in.
+#   --dry-run          Detect checks and print what WOULD run; execute nothing.
+#   -h, --help         Show this help.
 #
 # DIR ...   One or more project dirs to scan (default: current dir, plus the
 #           common sub-package dirs frontend/ client/ backend/ app/ if present).
@@ -39,20 +42,22 @@ DO_BUILD=1
 STRICT_BUILD=0
 FRESH_DEPS=0
 WITH_BEHAT=0
+WITH_SHELLCHECK=0
 DRY=0
 DIRS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --no-fix)       DO_FIX=0 ;;
-    --no-build)     DO_BUILD=0 ;;
-    --strict-build) STRICT_BUILD=1 ;;
-    --fresh-deps)   FRESH_DEPS=1 ;;
-    --with-behat)   WITH_BEHAT=1 ;;
-    --dry-run)      DRY=1 ;;
-    -h|--help)      awk 'NR==1{next} /^#/{print; next} /^$/{next} {exit}' "$0"; exit 0 ;;
-    --*)            echo "Unknown option: $1" >&2; exit 2 ;;
-    *)              DIRS+=("$1") ;;
+    --no-fix)           DO_FIX=0 ;;
+    --no-build)         DO_BUILD=0 ;;
+    --strict-build)     STRICT_BUILD=1 ;;
+    --fresh-deps)       FRESH_DEPS=1 ;;
+    --with-behat)       WITH_BEHAT=1 ;;
+    --with-shellcheck)  WITH_SHELLCHECK=1 ;;
+    --dry-run)          DRY=1 ;;
+    -h|--help)          awk 'NR==1{next} /^#/{print; next} /^$/{next} {exit}' "$0"; exit 0 ;;
+    --*)                echo "Unknown option: $1" >&2; exit 2 ;;
+    *)                  DIRS+=("$1") ;;
   esac
   shift
 done
@@ -380,6 +385,99 @@ py_checks() { # dir
   )
 }
 
+# ===== Shell (host only) ==================================================
+sh_checks() { # dir
+  local d="$1"
+  ( cd "$d" || return 0
+
+    # Collect shell sources. Prefer git (respects .gitignore, no vendor/ noise);
+    # fall back to find when the dir isn't a git repo. A leading wildcard like
+    # '*.sh' in a git pathspec matches at any depth, not just cwd, so this picks
+    # up e.g. both hooks/*.sh and tests/*.sh from the root in one call.
+    local files
+    files="$(git ls-files '*.sh' 2>/dev/null)"
+    if [ -z "$files" ]; then
+      files="$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist \) -prune -o -name '*.sh' -type f -print 2>/dev/null)"
+    fi
+    [ -n "$files" ] || return 0
+
+    # Adoption evidence, mirroring ruff_adopted above — a global shellcheck
+    # install shouldn't fire FAILs on every repo with a stray *.sh file.
+    # Adopted if: a .shellcheckrc exists, OR the project is shell-only (no
+    # other language manifest at this dir's root), OR --with-shellcheck forced it.
+    local shell_only=1
+    for manifest in composer.json package.json pyproject.toml requirements.txt; do
+      [ -f "$manifest" ] && shell_only=0
+    done
+    local sc_adopted=0
+    if [ -f .shellcheckrc ]; then
+      sc_adopted=1
+    elif [ "$shell_only" -eq 1 ]; then
+      sc_adopted=1
+    elif [ "$WITH_SHELLCHECK" -eq 1 ]; then
+      sc_adopted=1
+    fi
+
+    if [ "$sc_adopted" -eq 0 ]; then
+      record SKIP "shell[$d]: shellcheck (not shell-only / no .shellcheckrc — pass --with-shellcheck to force)"
+      return 0
+    fi
+
+    if ! command -v shellcheck >/dev/null 2>&1; then
+      record WARN "shell[$d]: shellcheck (shell project but shellcheck is not installed)"
+      return 0
+    fi
+
+    # Dialect is autodetected per-file from its shebang; a project needing a
+    # forced dialect sets `shell=sh` (or bash/dash/ksh) in its .shellcheckrc.
+    local sh_files=()
+    while IFS= read -r f; do
+      [ -n "$f" ] && sh_files+=("$f")
+    done <<SHFILES
+$files
+SHFILES
+    run_check "shell[$d]: shellcheck" shellcheck "${sh_files[@]}"
+  )
+}
+
+# ===== Custom project-declared checks =====================================
+# Escape hatch for projects whose real CI isn't shaped like any of the
+# language drivers above (e.g. a pure-shell repo running its own test
+# harness plus jq-based manifest validation). Reads a project-committed
+# .local-ci.json and runs each declared command as its own PASS/FAIL check.
+#
+# Trust model: identical to the npm/composer scripts already run above —
+# this executes commands the project itself authored and committed.
+#
+# Schema:
+#   { "checks": [ { "label": "hook tests", "run": "sh tests/run.sh" }, ... ] }
+custom_checks() { # dir
+  local d="$1"
+  ( cd "$d" || return 0
+    [ -f .local-ci.json ] || return 0
+
+    if ! command -v jq >/dev/null 2>&1; then
+      record WARN "custom[$d]: .local-ci.json present but jq is not installed to parse it"
+      return 0
+    fi
+
+    local n
+    n="$(jq -e '.checks | length' .local-ci.json 2>/dev/null)" || {
+      record FAIL "custom[$d]: .local-ci.json (malformed — expected {\"checks\":[{\"label\":...,\"run\":...}]})"
+      return 0
+    }
+
+    local i label cmd
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      label="$(jq -r ".checks[$i].label" .local-ci.json)"
+      cmd="$(jq -r ".checks[$i].run" .local-ci.json)"
+      run_check "custom[$d]: $label" bash -c "$cmd"
+      i=$((i + 1))
+    done
+  )
+}
+
 # ----- run ---------------------------------------------------------------
 # Snapshot tree state so AUTO-FIX CHANGES reports only what the fixers mutated
 # during this run, not pre-existing staged/unstaged user edits.
@@ -396,6 +494,8 @@ for d in "${DIRS[@]}"; do
   php_checks "$d"
   js_checks "$d"
   py_checks "$d"
+  sh_checks "$d"
+  custom_checks "$d"
 done
 
 # ----- summary -----------------------------------------------------------
