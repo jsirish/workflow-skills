@@ -113,13 +113,14 @@ PYEOF
 # Kept aligned with local-ci.sh detection: composer.json triggers composer
 # validate; php/py tool configs trigger their tools; package.json counts only
 # with a real lint/build/test script (checked at root and the sub-package dirs
-# local-ci scans). Residual drift (eslint-config-only, requirements-only
-# without .py files) stays fail-open on purpose.
+# local-ci scans); .local-ci.json or a .shellcheckrc-adopted shell project
+# triggers the custom/shell drivers. Residual drift (eslint-config-only,
+# requirements-only without .py files) stays fail-open on purpose.
 has_ci_configs() { # top
   local top="$1" f d
   for f in composer.json phpunit.xml phpunit.xml.dist phpstan.neon phpstan.neon.dist \
            phpcs.xml phpcs.xml.dist .phpcs.xml .phpcs.xml.dist \
-           pyproject.toml pytest.ini tox.ini; do
+           pyproject.toml pytest.ini tox.ini .local-ci.json; do
     [ -f "$top/$f" ] && return 0
   done
   if command -v node >/dev/null 2>&1; then
@@ -132,6 +133,9 @@ has_ci_configs() { # top
         ' "$top/${d}" 2>/dev/null && return 0
       fi
     done
+  fi
+  if [ -f "$top/.shellcheckrc" ] && "$GIT" -C "$top" ls-files '*.sh' 2>/dev/null | grep -q .; then
+    return 0
   fi
   return 1
 }
