@@ -1,11 +1,11 @@
 ---
 name: local-ci
-description: Run the executable test/lint layer locally — PHPUnit, PHPCS, PHPStan, npm lint/build/test, and Python ruff/pytest — auto-fixing where a fixer exists, then reporting pass/fail. Augments LLM code review (/code-review, pr-review-toolkit), which never actually runs tests. USE THIS SKILL when asked to "run ci", "run the tests", "run local ci", "check before opening a PR", "run the checks", "does it pass", or to verify a change before review/merge. Replaces per-project tests.sh scripts. Self-contained — bundles scripts/local-ci.sh.
+description: Run the executable test/lint layer locally — PHPUnit, PHPCS, PHPStan, npm lint/build/test, Python ruff/pytest, shellcheck, and project-declared custom checks (.local-ci.json) — auto-fixing where a fixer exists, then reporting pass/fail. Augments LLM code review (/code-review, pr-review-toolkit), which never actually runs tests. USE THIS SKILL when asked to "run ci", "run the tests", "run local ci", "check before opening a PR", "run the checks", "does it pass", or to verify a change before review/merge. Replaces per-project tests.sh scripts. Self-contained — bundles scripts/local-ci.sh.
 ---
 
 # Local CI
 
-LLM review (`/code-review`, `pr-review-toolkit`) reasons about code but **never executes a test suite**. This skill fills that gap: it detects which check configs a project has and runs the matching checks, the same canonical set `silverstripe/gha-ci` runs in CI — PHPUnit, PHPCS, PHPStan, the npm scripts, and (for Python) ruff + pytest.
+LLM review (`/code-review`, `pr-review-toolkit`) reasons about code but **never executes a test suite**. This skill fills that gap: it detects which check configs a project has and runs the matching checks, the same canonical set `silverstripe/gha-ci` runs in CI — PHPUnit, PHPCS, PHPStan, the npm scripts, and (for Python) ruff + pytest. It also covers shell projects that have adopted shellcheck (via `.shellcheckrc`) and, via a project-committed `.local-ci.json`, any custom entrypoint a project's real CI actually runs.
 
 It is the executable counterpart to review, not a replacement. Run it, then feed the summary into the review.
 
@@ -33,8 +33,25 @@ Cadence: `feature-dev` → **`/local-ci`** → push → `/code-review` or `/pr-r
 | Python lint | `[tool.ruff]` in `pyproject.toml`, `ruff.toml`/`.ruff.toml`, or a ruff hook in `.pre-commit-config.yaml` | `ruff check --fix` → `ruff check` |
 | Python test | pytest available + tests present | `pytest -q` with cwd forced onto `PYTHONPATH` (no tests → SKIP, not FAIL) |
 | Behat | `behat.yml` | **opt-in** via `--with-behat` (needs a browser/driver) |
+| Shellcheck | `*.sh` files present (tracked or untracked-but-not-ignored) and `.shellcheckrc` exists, or forced via `--with-shellcheck` | `shellcheck` over every matching file (dialect autodetected per-file from its shebang; adopted-but-missing-binary → WARN). Deliberately config-only, like the Python lint row below — no "shell-only project" auto-adopt, since shellcheck's default sensitivity would otherwise hard-FAIL a project's very first run with no escape hatch |
+| Custom checks | `.local-ci.json` at the project root | Runs each declared command as its own PASS/FAIL check (`jq` missing → WARN; malformed file → FAIL) |
 
 The legacy `phpmd` / `phploc` / `pdepend` / `phpdox` tools some old `tests.sh` scripts ran are intentionally **not** included — no project CI actually runs them.
+
+### Custom checks (`.local-ci.json`)
+
+For a project whose real CI isn't shaped like any of the language drivers above — e.g. a pure-shell repo that also runs `jq`-based manifest validation or its own test harness — commit a `.local-ci.json` at the project root:
+
+```json
+{
+  "checks": [
+    { "label": "manifest validation", "run": "jq -e '.name' plugin.json >/dev/null" },
+    { "label": "hook tests", "run": "sh tests/run.sh" }
+  ]
+}
+```
+
+Each entry becomes its own `custom[<dir>]: <label>` row in the SUMMARY, executed via `bash -c` and recorded PASS/FAIL like any other check. **Trust model:** this is identical to local-ci already running a project's own npm/composer scripts — it executes commands the project itself authored and committed. Requires `jq` on the host to parse the file; if `jq` is missing, this driver WARNs instead of silently skipping. Custom checks run regardless of `--no-fix` — same as PHPUnit/npm test/pytest above; only the auto-fixer sub-steps (phpcbf / eslint --fix / ruff --fix) are gated by that flag.
 
 ## How to run
 
@@ -52,6 +69,7 @@ Options:
 - `--strict-build` — treat a failing `sake dev/build` as FAIL rather than WARN. Use when you want the same hard gate GHA enforces.
 - `--fresh-deps` — force a real `composer install` even when `vendor/` exists. Mirrors GHA's clean-install behaviour; slower and mutates `vendor/`. Use before a PR to verify a clean dependency resolution.
 - `--with-behat` — also run Behat (off by default; it needs a browser + chromedriver).
+- `--with-shellcheck` — force shellcheck even without a `.shellcheckrc`.
 - `DIR …` — one or more dirs to scan. Default: the current dir plus the common
   sub-package dirs `frontend/ client/ backend/ app/` when they exist (handles
   monorepo layouts).

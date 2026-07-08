@@ -5,21 +5,24 @@
 # Detects which check configs a project has and runs the matching checks,
 # auto-fixing where a fixer exists (then re-checking), and prints a pass/fail
 # summary. Mirrors the canonical silverstripe/gha-ci set (phpunit, phpcs,
-# phpstan) plus npm scripts and Python (ruff, pytest).
+# phpstan) plus npm scripts, Python (ruff, pytest), shell scripts (shellcheck),
+# and project-declared custom checks (.local-ci.json).
 #
 # Usage:
 #   local-ci.sh [options] [DIR ...]
 #
 # Options:
-#   --no-fix        Do not run auto-fixers (phpcbf / eslint --fix / ruff --fix);
-#                   report only.
-#   --no-build      Skip the SilverStripe `sake dev/build` step.
-#   --strict-build  Treat a failing `sake dev/build` as FAIL (default: WARN).
-#   --fresh-deps    Force a real `composer install` even when vendor/ exists
-#                   (mirrors GHA's clean-install behaviour; slower, mutates vendor/).
-#   --with-behat    Also run Behat (behat.yml) — opt-in; needs a browser/driver.
-#   --dry-run       Detect checks and print what WOULD run; execute nothing.
-#   -h, --help      Show this help.
+#   --no-fix           Do not run auto-fixers (phpcbf / eslint --fix / ruff --fix);
+#                      report only.
+#   --no-build         Skip the SilverStripe `sake dev/build` step.
+#   --strict-build     Treat a failing `sake dev/build` as FAIL (default: WARN).
+#   --fresh-deps       Force a real `composer install` even when vendor/ exists
+#                      (mirrors GHA's clean-install behaviour; slower, mutates vendor/).
+#   --with-behat       Also run Behat (behat.yml) — opt-in; needs a browser/driver.
+#   --with-shellcheck  Force shellcheck even without a .shellcheckrc or a
+#                      shell-only project layout — opt-in.
+#   --dry-run          Detect checks and print what WOULD run; execute nothing.
+#   -h, --help         Show this help.
 #
 # DIR ...   One or more project dirs to scan (default: current dir, plus the
 #           common sub-package dirs frontend/ client/ backend/ app/ if present).
@@ -39,20 +42,22 @@ DO_BUILD=1
 STRICT_BUILD=0
 FRESH_DEPS=0
 WITH_BEHAT=0
+WITH_SHELLCHECK=0
 DRY=0
 DIRS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --no-fix)       DO_FIX=0 ;;
-    --no-build)     DO_BUILD=0 ;;
-    --strict-build) STRICT_BUILD=1 ;;
-    --fresh-deps)   FRESH_DEPS=1 ;;
-    --with-behat)   WITH_BEHAT=1 ;;
-    --dry-run)      DRY=1 ;;
-    -h|--help)      awk 'NR==1{next} /^#/{print; next} /^$/{next} {exit}' "$0"; exit 0 ;;
-    --*)            echo "Unknown option: $1" >&2; exit 2 ;;
-    *)              DIRS+=("$1") ;;
+    --no-fix)           DO_FIX=0 ;;
+    --no-build)         DO_BUILD=0 ;;
+    --strict-build)     STRICT_BUILD=1 ;;
+    --fresh-deps)       FRESH_DEPS=1 ;;
+    --with-behat)       WITH_BEHAT=1 ;;
+    --with-shellcheck)  WITH_SHELLCHECK=1 ;;
+    --dry-run)          DRY=1 ;;
+    -h|--help)          awk 'NR==1{next} /^#/{print; next} /^$/{next} {exit}' "$0"; exit 0 ;;
+    --*)                echo "Unknown option: $1" >&2; exit 2 ;;
+    *)                  DIRS+=("$1") ;;
   esac
   shift
 done
@@ -63,7 +68,12 @@ ROOT="$(pwd)"
 # Checks run in subshells (per-dir cd), so results go to a temp file that
 # survives the subshell boundary rather than an in-memory array.
 RESULTS_FILE="$(mktemp -t local-ci.XXXXXX)"
-trap 'rm -f "$RESULTS_FILE"' EXIT
+# Ledger of shellcheck'd files (absolute paths), so the same file is never
+# linted (and reported) twice when DIRS has overlapping entries — e.g. "."
+# and "frontend" when frontend/ is both its own DIRS entry and already
+# picked up by the root scan (git ls-files '*.sh' matches at any depth).
+SH_SEEN_FILE="$(mktemp -t local-ci-sh-seen.XXXXXX)"
+trap 'rm -f "$RESULTS_FILE" "$SH_SEEN_FILE"' EXIT
 
 record() { # status label
   printf '%s\t%s\n' "$1" "$2" >> "$RESULTS_FILE"
@@ -380,6 +390,122 @@ py_checks() { # dir
   )
 }
 
+# ===== Shell (host only) ==================================================
+sh_checks() { # dir
+  local d="$1"
+  ( cd "$d" || return 0
+
+    # Collect shell sources: tracked *.sh files plus any not-yet-`git add`ed
+    # ones that aren't gitignored (so a brand-new script still gets linted
+    # before its first commit). core.quotePath=false keeps filenames with
+    # special/non-ASCII characters literal instead of C-quoted (which would
+    # otherwise not match any real path on disk). Fall back to find when the
+    # dir isn't a git repo. A leading wildcard like '*.sh' in a git pathspec
+    # matches at any depth below cwd, not just cwd itself, so this picks up
+    # e.g. both hooks/*.sh and tests/*.sh from the root in one call.
+    local files
+    if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+      files="$(git -c core.quotePath=false ls-files '*.sh' 2>/dev/null
+               git -c core.quotePath=false ls-files --others --exclude-standard '*.sh' 2>/dev/null)"
+    else
+      files="$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist \) -prune -o -name '*.sh' -type f -print 2>/dev/null)"
+    fi
+    [ -n "$files" ] || return 0
+
+    # Adoption evidence: an explicit .shellcheckrc, or --with-shellcheck.
+    # Deliberately config-only (mirrors ruff_adopted above) — no "shell-only
+    # project" auto-adopt: shellcheck's default sensitivity flags real-world
+    # scripts almost universally, so auto-adopting from language alone would
+    # hard-FAIL (and, via the push gate, block pushes on) a project's very
+    # first run with no config-driven escape hatch.
+    local sc_adopted=0
+    if [ -f .shellcheckrc ]; then
+      sc_adopted=1
+    elif [ "$WITH_SHELLCHECK" -eq 1 ]; then
+      sc_adopted=1
+    fi
+
+    if [ "$sc_adopted" -eq 0 ]; then
+      record SKIP "shell[$d]: shellcheck (no .shellcheckrc — pass --with-shellcheck to force)"
+      return 0
+    fi
+
+    if ! command -v shellcheck >/dev/null 2>&1; then
+      record WARN "shell[$d]: shellcheck (adopted via .shellcheckrc but shellcheck is not installed)"
+      return 0
+    fi
+
+    # Build the file array, deduping against SH_SEEN_FILE (by absolute path)
+    # so overlapping DIRS entries (e.g. "." and "frontend", when frontend/ is
+    # both its own entry and already swept up by the root's recursive scan)
+    # never shellcheck — or report — the same file twice in one run.
+    local sh_files=() rp
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      rp="$(cd "$(dirname "$f")" 2>/dev/null && pwd)/$(basename "$f")" || continue
+      grep -qxF "$rp" "$SH_SEEN_FILE" 2>/dev/null && continue
+      echo "$rp" >> "$SH_SEEN_FILE"
+      sh_files+=("$f")
+    done <<SHFILES
+$files
+SHFILES
+
+    if [ "${#sh_files[@]}" -eq 0 ]; then
+      record SKIP "shell[$d]: shellcheck (all files already checked via another dir)"
+      return 0
+    fi
+
+    # Dialect is autodetected per-file from its shebang; a project needing a
+    # forced dialect sets `shell=sh` (or bash/dash/ksh) in its .shellcheckrc.
+    # `--` guards a file whose name happens to start with `-`.
+    run_check "shell[$d]: shellcheck" shellcheck -- "${sh_files[@]}"
+  )
+}
+
+# ===== Custom project-declared checks =====================================
+# Escape hatch for projects whose real CI isn't shaped like any of the
+# language drivers above (e.g. a pure-shell repo running its own test
+# harness plus jq-based manifest validation). Reads a project-committed
+# .local-ci.json and runs each declared command as its own PASS/FAIL check.
+# Runs regardless of --no-fix, same as phpunit/npm test/pytest above — only
+# the auto-fixer sub-steps (phpcbf/eslint --fix/ruff --fix) are gated by it.
+#
+# Trust model: identical to the npm/composer scripts already run above —
+# this executes commands the project itself authored and committed.
+#
+# Schema:
+#   { "checks": [ { "label": "hook tests", "run": "sh tests/run.sh" }, ... ] }
+custom_checks() { # dir
+  local d="$1"
+  ( cd "$d" || return 0
+    [ -f .local-ci.json ] || return 0
+
+    if ! command -v jq >/dev/null 2>&1; then
+      record WARN "custom[$d]: .local-ci.json present but jq is not installed to parse it"
+      return 0
+    fi
+
+    if ! jq -e '.checks | type == "array"' .local-ci.json >/dev/null 2>&1; then
+      record FAIL "custom[$d]: .local-ci.json (malformed — expected {\"checks\":[{\"label\":...,\"run\":...}]})"
+      return 0
+    fi
+
+    # Single-pass extraction (one jq spawn regardless of check count). @tsv
+    # escapes embedded tab/newline/CR/backslash within each field, so a
+    # label containing a literal newline can't split a row across two lines
+    # downstream — RESULTS_FILE and the git-push-gate status marker are both
+    # parsed as one record per line.
+    local label cmd
+    while IFS=$'\t' read -r label cmd; do
+      if [ -z "$cmd" ]; then
+        record FAIL "custom[$d]: ${label:-unnamed check} (malformed — missing \"run\")"
+        continue
+      fi
+      run_check "custom[$d]: ${label:-unnamed check}" bash -c "$cmd"
+    done < <(jq -r '.checks[] | [(.label // ""), (.run // "")] | @tsv' .local-ci.json)
+  )
+}
+
 # ----- run ---------------------------------------------------------------
 # Snapshot tree state so AUTO-FIX CHANGES reports only what the fixers mutated
 # during this run, not pre-existing staged/unstaged user edits.
@@ -396,6 +522,8 @@ for d in "${DIRS[@]}"; do
   php_checks "$d"
   js_checks "$d"
   py_checks "$d"
+  sh_checks "$d"
+  custom_checks "$d"
 done
 
 # ----- summary -----------------------------------------------------------
