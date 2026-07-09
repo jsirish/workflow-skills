@@ -16,6 +16,9 @@
 #                      report only.
 #   --no-build         Skip the SilverStripe `sake dev/build` step.
 #   --strict-build     Treat a failing `sake dev/build` as FAIL (default: WARN).
+#   --strict-lint      Treat failing phpcs/phpstan/eslint lint as FAIL
+#                      (default: WARN — style/static-analysis findings surface
+#                      without gating a push; real test/build breaks still FAIL).
 #   --fresh-deps       Force a real `composer install` even when vendor/ exists
 #                      (mirrors GHA's clean-install behaviour; slower, mutates vendor/).
 #   --with-behat       Also run Behat (behat.yml) — opt-in; needs a browser/driver.
@@ -40,6 +43,7 @@ set -uo pipefail
 DO_FIX=1
 DO_BUILD=1
 STRICT_BUILD=0
+STRICT_LINT=0
 FRESH_DEPS=0
 WITH_BEHAT=0
 WITH_SHELLCHECK=0
@@ -51,6 +55,7 @@ while [ $# -gt 0 ]; do
     --no-fix)           DO_FIX=0 ;;
     --no-build)         DO_BUILD=0 ;;
     --strict-build)     STRICT_BUILD=1 ;;
+    --strict-lint)      STRICT_LINT=1 ;;
     --fresh-deps)       FRESH_DEPS=1 ;;
     --with-behat)       WITH_BEHAT=1 ;;
     --with-shellcheck)  WITH_SHELLCHECK=1 ;;
@@ -109,6 +114,27 @@ run_check() { # label cmd...
     record PASS "$label"
   else
     record FAIL "$label"
+  fi
+}
+
+# Like run_check, but a non-zero exit records WARN instead of FAIL unless
+# STRICT_LINT=1 (--strict-lint). For style/static-analysis checks (phpcs,
+# phpstan, eslint) where findings shouldn't gate a push by default — real
+# test/build breaks still go through run_check and stay FAIL.
+run_lint_check() { # label cmd...
+  local label="$1"; shift
+  hdr "$label"
+  if [ "$DRY" -eq 1 ]; then
+    printf '   \033[90m[dry-run] %s\033[0m\n' "$*"
+    record PLAN "$label"
+    return 0
+  fi
+  if "$@"; then
+    record PASS "$label"
+  elif [ "$STRICT_LINT" -eq 1 ]; then
+    record FAIL "$label"
+  else
+    record WARN "$label (lint finding — not gating; re-run with --strict-lint to gate)"
   fi
 }
 
@@ -239,7 +265,7 @@ php_checks() { # dir
         # shellcheck disable=SC2086  # intentional word-split of $paths
         run vendor/bin/phpcbf --standard="$std" $paths || true
       fi
-      run_check "PHP[$d]: phpcs" bash -c '
+      run_lint_check "PHP[$d]: phpcs" bash -c '
         if [ -n "'"$PRE"'" ]; then R="'"$PRE"' "; else R=""; fi
         $R vendor/bin/phpcs -s --report=summary --standard="'"$std"'" --extensions=php,inc --ignore=autoload.php --ignore=vendor/ '"$paths"''
     elif [ -n "$std" ] && [ -d vendor ]; then
@@ -249,7 +275,7 @@ php_checks() { # dir
     # PHPStan
     local stan_cfg; stan_cfg="$(first_existing phpstan.neon phpstan.neon.dist || true)"
     if [ -n "$stan_cfg" ] && [ -x vendor/bin/phpstan ]; then
-      run_check "PHP[$d]: phpstan" bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/phpstan analyse --no-progress; else vendor/bin/phpstan analyse --no-progress; fi'
+      run_lint_check "PHP[$d]: phpstan" bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/phpstan analyse --no-progress; else vendor/bin/phpstan analyse --no-progress; fi'
     elif [ -n "$stan_cfg" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpstan (adopted via config but vendor/bin/phpstan missing)"
     fi
@@ -298,10 +324,10 @@ js_checks() { # dir
         X bash -c 'npx --no-install eslint . --fix --no-error-on-unmatched-pattern 2>/dev/null || true'
       fi
       if [ "$HAS_LINT_SCRIPT" -eq 1 ]; then
-        run_check "JS[$d]: lint" npm run lint
+        run_lint_check "JS[$d]: lint" npm run lint
       elif [ "$HAS_ESLINT_CFG" -eq 1 ] && command -v npx >/dev/null 2>&1; then
         # Flat/legacy eslint config present but no lint script — run eslint directly.
-        run_check "JS[$d]: lint (eslint)" bash -c 'npx --no-install eslint . --no-error-on-unmatched-pattern'
+        run_lint_check "JS[$d]: lint (eslint)" bash -c 'npx --no-install eslint . --no-error-on-unmatched-pattern'
       fi
     fi
 

@@ -6,15 +6,17 @@
 #   sha=<HEAD-at-run> result=<PASS|FAIL|WARN|NONE> ts=<epoch>
 #
 # Gate rules (applied per push invocation in the command):
-#   - repo has no recognised executable check configs -> allow
+#   - marker missing (no local-ci run recorded)        -> allow (fail-open;
+#     don't trap a push behind a CI run that was never kicked off)
 #   - result=NONE (local-ci found nothing to run)     -> allow
+#   - result=WARN                                     -> allow (WARN is not a
+#     green gate for "done", but it no longer blocks the push itself;
+#     investigate before declaring done)
 #   - result=FAIL                                     -> block
-#   - result=WARN                                     -> block (WARN is not a
-#     green gate; investigate, then bypass if it is genuinely benign)
 #   - result=PASS at HEAD                             -> allow
 #   - result=PASS at an ancestor of HEAD, run < 4h ago -> allow (covers the
 #     run-ci-then-commit-then-push flow)
-#   - marker missing or stale                          -> block
+#   - PASS stale or not an ancestor of HEAD             -> block
 #
 # Command parsing uses a shell tokenizer (python3 shlex), not a regex, so
 # quoted `-C` paths, paths with spaces, per-invocation `-C`/`-c` options,
@@ -109,37 +111,6 @@ PYEOF
 )
 [ -z "$PUSH_DIRS" ] && exit 0
 
-# --- does this repo have executable check configs local-ci would run? -----
-# Kept aligned with local-ci.sh detection: composer.json triggers composer
-# validate; php/py tool configs trigger their tools; package.json counts only
-# with a real lint/build/test script (checked at root and the sub-package dirs
-# local-ci scans); .local-ci.json or a .shellcheckrc-adopted shell project
-# triggers the custom/shell drivers. Residual drift (eslint-config-only,
-# requirements-only without .py files) stays fail-open on purpose.
-has_ci_configs() { # top
-  local top="$1" f d
-  for f in composer.json phpunit.xml phpunit.xml.dist phpstan.neon phpstan.neon.dist \
-           phpcs.xml phpcs.xml.dist .phpcs.xml .phpcs.xml.dist \
-           pyproject.toml pytest.ini tox.ini .local-ci.json; do
-    [ -f "$top/$f" ] && return 0
-  done
-  if command -v node >/dev/null 2>&1; then
-    for d in "" "frontend/" "client/" "backend/" "app/"; do
-      if [ -f "$top/${d}package.json" ]; then
-        node -e '
-          const s = (require(process.argv[1] + "/package.json").scripts || {});
-          const real = (s.lint || s.build || (s.test && !/no test specified/.test(s.test)));
-          process.exit(real ? 0 : 1);
-        ' "$top/${d}" 2>/dev/null && return 0
-      fi
-    done
-  fi
-  if [ -f "$top/.shellcheckrc" ] && "$GIT" -C "$top" ls-files '*.sh' 2>/dev/null | grep -q .; then
-    return 0
-  fi
-  return 1
-}
-
 block() { # message; prints guidance and exits 2
   {
     echo "BLOCKED: git push gated on local-ci. $1"
@@ -158,8 +129,7 @@ gate_dir() { # dir (resolved)
   marker="$gitdir/local-ci-status"
 
   if [ ! -f "$marker" ]; then
-    has_ci_configs "$top" || return 0
-    block "No local-ci run recorded for this repo (marker missing)."
+    return 0  # fail-open: no local-ci run recorded, don't block on that alone
   fi
 
   local sha result ts head_sha
@@ -170,8 +140,8 @@ gate_dir() { # dir (resolved)
 
   case "$result" in
     NONE) return 0 ;;
+    WARN) return 0 ;;  # not a green gate for "done", but no longer blocks the push
     FAIL) block "Last local-ci run FAILED (at ${sha:0:8})." ;;
-    WARN) block "Last local-ci run has WARNs (at ${sha:0:8}); WARN is not a green gate." ;;
     PASS) ;;
     *)    block "Unreadable marker ($marker)." ;;
   esac

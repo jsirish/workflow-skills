@@ -25,9 +25,9 @@ Cadence: `feature-dev` → **`/local-ci`** → push → `/code-review` or `/pr-r
 | composer install | `vendor/` missing or `--fresh-deps` | `composer install` (else `--dry-run` resolve check) |
 | dev/build | `vendor/bin/sake` (SilverStripe) | `sake dev/build flush=1` (WARN-only; FAIL with `--strict-build`) |
 | PHPUnit | `phpunit.xml` / `.dist` | `vendor/bin/phpunit` (config present but binary missing → WARN, not silently skipped) |
-| PHPCS | `phpcs.xml` / `.dist` | `phpcbf` (auto-fix) → `phpcs --standard=…` (config present but binary missing → WARN, not silently skipped) |
-| PHPStan | `phpstan.neon` / `.dist` | `vendor/bin/phpstan analyse` (config present but binary missing → WARN, not silently skipped) |
-| JS lint | `package.json` lint script or eslint config | `eslint --fix` → `npm run lint` |
+| PHPCS | `phpcs.xml` / `.dist` | `phpcbf` (auto-fix) → `phpcs --standard=…` (config present but binary missing → WARN, not silently skipped; findings → WARN, not FAIL, unless `--strict-lint`) |
+| PHPStan | `phpstan.neon` / `.dist` | `vendor/bin/phpstan analyse` (config present but binary missing → WARN, not silently skipped; findings → WARN, not FAIL, unless `--strict-lint`) |
+| JS lint | `package.json` lint script or eslint config | `eslint --fix` → `npm run lint` (findings → WARN, not FAIL, unless `--strict-lint`) |
 | JS build | `package.json` build script | `npm run build` |
 | JS test | `package.json` test script | `npm test` (npm placeholder script is skipped) |
 | Python lint | `[tool.ruff]` in `pyproject.toml`, `ruff.toml`/`.ruff.toml`, or a ruff hook in `.pre-commit-config.yaml` | `ruff check --fix` → `ruff check` |
@@ -67,6 +67,7 @@ Options:
 - `--no-fix` — report only; do not run phpcbf / eslint --fix / ruff --fix.
 - `--no-build` — skip the SilverStripe `sake dev/build` step.
 - `--strict-build` — treat a failing `sake dev/build` as FAIL rather than WARN. Use when you want the same hard gate GHA enforces.
+- `--strict-lint` — treat failing phpcs/phpstan/eslint as FAIL rather than WARN. Off by default: style/static-analysis findings surface in the SUMMARY and no longer gate a push, while phpunit/composer-install/build breaks still FAIL.
 - `--fresh-deps` — force a real `composer install` even when `vendor/` exists. Mirrors GHA's clean-install behaviour; slower and mutates `vendor/`. Use before a PR to verify a clean dependency resolution.
 - `--with-behat` — also run Behat (off by default; it needs a browser + chromedriver).
 - `--with-shellcheck` — force shellcheck even without a `.shellcheckrc`.
@@ -97,9 +98,9 @@ Every non-dry run writes a one-line marker to `<git-dir>/local-ci-status`:
 sha=<HEAD-at-run> result=<PASS|FAIL|WARN|NONE> ts=<epoch>
 ```
 
-`scripts/git-push-gate.sh` is a Claude Code `PreToolUse` (Bash) hook that consumes the marker and blocks `git push` when the last run FAILed, has WARNs (WARN is not a green gate), is missing, or is stale. A PASS is valid at HEAD, or at an ancestor of HEAD for 4 hours (covers the run-ci, commit, push flow). The marker is stamped per repo: a run against one repo never green-lights another, and runs where nothing executed record `NONE`, not `PASS`. Repos with no recognised check configs are never gated.
+`scripts/git-push-gate.sh` is a Claude Code `PreToolUse` (Bash) hook that consumes the marker and blocks `git push` only when the last recorded run **FAILed**, or a recorded **PASS** is stale or not an ancestor of HEAD. A PASS is valid at HEAD, or at an ancestor of HEAD for 4 hours (covers the run-ci, commit, push flow). A **missing marker** (no local-ci run recorded) and a **WARN** result both **allow the push** — WARN still isn't a green gate for "done" (investigate before declaring done), but it no longer blocks the push itself; a marker being missing means CI was never run against this repo, which shouldn't be able to trap a push behind a check that was never kicked off. The marker is stamped per repo: a run against one repo never green-lights another, and runs where nothing executed record `NONE`, not `PASS`.
 
-The command is parsed with a shell tokenizer, not a regex, so quoted `-C` paths, paths with spaces, `git -c <cfg>` options, multiple pushes in one compound command, and strings that merely mention "git push" are handled correctly. Known fail-open cases, by design: `jq` or `python3` missing, git aliases that expand to push, and the residual `has_ci_configs` drift noted in the script header. Do not treat the gate as a security boundary; it is a workflow guard.
+The command is parsed with a shell tokenizer, not a regex, so quoted `-C` paths, paths with spaces, `git -c <cfg>` options, multiple pushes in one compound command, and strings that merely mention "git push" are handled correctly. Known fail-open cases, by design: `jq` or `python3` missing, and git aliases that expand to push. Do not treat the gate as a security boundary; it is a workflow guard.
 
 Register it in `~/.claude/settings.json` under `hooks.PreToolUse` (matcher `Bash`):
 
@@ -112,7 +113,7 @@ Bypass for an investigated, genuinely benign case: prefix the push with `SKIP_CI
 ## Notes
 
 - **`composer validate` and `composer install --dry-run` run automatically** on every PHP project — these are the same checks GHA performs implicitly when building the environment. If `vendor/` is missing, a real install runs instead. Use `--fresh-deps` for a full clean-install mirror.
-- `composer validate` runs with `--strict`, which also surfaces recommendation-level warnings (loose version constraints, a stray `version` field, etc.), not just real problems (malformed json, out-of-sync lock) — and both share the same non-zero exit code. If `--strict` fails, the script re-checks with a plain (non-strict) `composer validate`: still non-zero means a genuine problem and stays a hard FAIL; exit 0 means the only issue was a --strict-only warning, which records WARN instead. WARN still blocks `git push` via the push gate until investigated (see below).
+- `composer validate` runs with `--strict`, which also surfaces recommendation-level warnings (loose version constraints, a stray `version` field, etc.), not just real problems (malformed json, out-of-sync lock) — and both share the same non-zero exit code. If `--strict` fails, the script re-checks with a plain (non-strict) `composer validate`: still non-zero means a genuine problem and stays a hard FAIL; exit 0 means the only issue was a --strict-only warning, which records WARN instead. WARN surfaces in the SUMMARY and no longer blocks `git push` via the push gate (see below), but is still worth investigating before declaring the change done.
 - `dev/build` failure is WARN by default because phpunit can sometimes self-bootstrap from its own bootstrap file. Pass `--strict-build` to make it a hard gate.
 - The script never commits. Auto-fixes are left in the working tree for you to review and commit.
 - A project with no recognised configs reports "nothing to run" rather than erroring.
