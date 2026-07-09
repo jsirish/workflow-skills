@@ -19,22 +19,28 @@ Cadence: `feature-dev` → **`/local-ci`** → push → `/code-review` or `/pr-r
 
 ## What it runs (gating by config presence)
 
+**Every check is WARN-by-default** — a no-flag run never blocks (`exit 0`), it just surfaces
+findings in the SUMMARY. Pass `--strict` to escalate the whole run to FAIL, or a scoped
+`--strict-build` / `--strict-lint` to escalate just that category. The one exception is a
+**broken local-ci setup** (malformed `.local-ci.json`) — that's always a hard FAIL, `--strict`
+or not, because it isn't a finding to review, it's local-ci itself failing to run.
+
 | Check | Fires when present | Command |
 |---|---|---|
-| composer validate | `composer.json` present | `composer validate --strict` (WARN-only; the `--strict` warnings are cosmetic) |
-| composer install | `vendor/` missing or `--fresh-deps` | `composer install` (else `--dry-run` resolve check) |
-| dev/build | `vendor/bin/sake` (SilverStripe) | `sake dev/build flush=1` (WARN-only; FAIL with `--strict-build`) |
-| PHPUnit | `phpunit.xml` / `.dist` | `vendor/bin/phpunit` (config present but binary missing → WARN, not silently skipped) |
-| PHPCS | `phpcs.xml` / `.dist` | `phpcbf` (auto-fix) → `phpcs --standard=…` (config present but binary missing → WARN, not silently skipped; findings → WARN, not FAIL, unless `--strict-lint`) |
-| PHPStan | `phpstan.neon` / `.dist` | `vendor/bin/phpstan analyse` (config present but binary missing → WARN, not silently skipped; findings → WARN, not FAIL, unless `--strict-lint`) |
-| JS lint | `package.json` lint script or eslint config | `eslint --fix` → `npm run lint` (findings → WARN, not FAIL, unless `--strict-lint`) |
-| JS build | `package.json` build script | `npm run build` |
-| JS test | `package.json` test script | `npm test` (npm placeholder script is skipped) |
-| Python lint | `[tool.ruff]` in `pyproject.toml`, `ruff.toml`/`.ruff.toml`, or a ruff hook in `.pre-commit-config.yaml` | `ruff check --fix` → `ruff check` |
-| Python test | pytest available + tests present | `pytest -q` with cwd forced onto `PYTHONPATH` (no tests → SKIP, not FAIL) |
-| Behat | `behat.yml` | **opt-in** via `--with-behat` (needs a browser/driver) |
-| Shellcheck | `*.sh` files present (tracked or untracked-but-not-ignored) and `.shellcheckrc` exists, or forced via `--with-shellcheck` | `shellcheck` over every matching file (dialect autodetected per-file from its shebang; adopted-but-missing-binary → WARN). Deliberately config-only, like the Python lint row below — no "shell-only project" auto-adopt, since shellcheck's default sensitivity would otherwise hard-FAIL a project's very first run with no escape hatch |
-| Custom checks | `.local-ci.json` at the project root | Runs each declared command as its own PASS/FAIL check (`jq` missing → WARN; malformed file → FAIL) |
+| composer validate | `composer.json` present | `composer validate --strict` (genuine errors: WARN; FAIL with `--strict`. `--strict`-only cosmetic warnings always WARN) |
+| composer install | `vendor/` missing or `--fresh-deps` | `composer install` (else `--dry-run` resolve check) (WARN; FAIL with `--strict`) |
+| dev/build | `vendor/bin/sake` (SilverStripe) | `sake dev/build flush=1` (WARN; FAIL with `--strict-build` or `--strict`) |
+| PHPUnit | `phpunit.xml` / `.dist` | `vendor/bin/phpunit` (config present but binary missing → WARN, not silently skipped; test failures → WARN, FAIL with `--strict`) |
+| PHPCS | `phpcs.xml` / `.dist` | `phpcbf` (auto-fix) → `phpcs --standard=…` (config present but binary missing → WARN, not silently skipped; findings → WARN, FAIL with `--strict-lint` or `--strict`) |
+| PHPStan | `phpstan.neon` / `.dist` | `vendor/bin/phpstan analyse` (config present but binary missing → WARN, not silently skipped; findings → WARN, FAIL with `--strict-lint` or `--strict`) |
+| JS lint | `package.json` lint script or eslint config | `eslint --fix` → `npm run lint` (findings → WARN, FAIL with `--strict-lint` or `--strict`) |
+| JS build | `package.json` build script | `npm run build` (WARN; FAIL with `--strict`) |
+| JS test | `package.json` test script | `npm test` (npm placeholder script is skipped) (WARN; FAIL with `--strict`) |
+| Python lint | `[tool.ruff]` in `pyproject.toml`, `ruff.toml`/`.ruff.toml`, or a ruff hook in `.pre-commit-config.yaml` | `ruff check --fix` → `ruff check` (WARN; FAIL with `--strict`) |
+| Python test | pytest available + tests present | `pytest -q` with cwd forced onto `PYTHONPATH` (no tests → SKIP, not FAIL) (WARN; FAIL with `--strict`) |
+| Behat | `behat.yml` | **opt-in** via `--with-behat` (needs a browser/driver) (WARN; FAIL with `--strict`) |
+| Shellcheck | `*.sh` files present (tracked or untracked-but-not-ignored) and `.shellcheckrc` exists, or forced via `--with-shellcheck` | `shellcheck` over every matching file (dialect autodetected per-file from its shebang; adopted-but-missing-binary → WARN). Deliberately config-only, like the Python lint row below — no "shell-only project" auto-adopt, since shellcheck's default sensitivity would otherwise swamp a project's very first run with no escape hatch (findings → WARN; FAIL with `--strict`) |
+| Custom checks | `.local-ci.json` at the project root | Runs each declared command as its own check (`jq` missing → WARN; malformed file or a check missing `"run"` → **always FAIL**, regardless of `--strict`; a declared check's own failure → WARN, FAIL with `--strict`) |
 
 The legacy `phpmd` / `phploc` / `pdepend` / `phpdox` tools some old `tests.sh` scripts ran are intentionally **not** included — no project CI actually runs them.
 
@@ -51,7 +57,7 @@ For a project whose real CI isn't shaped like any of the language drivers above 
 }
 ```
 
-Each entry becomes its own `custom[<dir>]: <label>` row in the SUMMARY, executed via `bash -c` and recorded PASS/FAIL like any other check. **Trust model:** this is identical to local-ci already running a project's own npm/composer scripts — it executes commands the project itself authored and committed. Requires `jq` on the host to parse the file; if `jq` is missing, this driver WARNs instead of silently skipping. Custom checks run regardless of `--no-fix` — same as PHPUnit/npm test/pytest above; only the auto-fixer sub-steps (phpcbf / eslint --fix / ruff --fix) are gated by that flag.
+Each entry becomes its own `custom[<dir>]: <label>` row in the SUMMARY, executed via `bash -c` and recorded PASS/WARN (FAIL with `--strict`) like any other check. **Trust model:** this is identical to local-ci already running a project's own npm/composer scripts — it executes commands the project itself authored and committed. Requires `jq` on the host to parse the file; if `jq` is missing, this driver WARNs instead of silently skipping. A malformed `.local-ci.json` (not valid JSON, or a check missing `"run"`) is a **broken setup, not a finding** — it always FAILs, `--strict` or not. Custom checks run regardless of `--no-fix` — same as PHPUnit/npm test/pytest above; only the auto-fixer sub-steps (phpcbf / eslint --fix / ruff --fix) are gated by that flag.
 
 ## How to run
 
@@ -66,8 +72,9 @@ Options:
 - `--dry-run` — detect checks and print what *would* run; execute nothing. Use this first on an unfamiliar project to see the plan before anything mutates files or the DB.
 - `--no-fix` — report only; do not run phpcbf / eslint --fix / ruff --fix.
 - `--no-build` — skip the SilverStripe `sake dev/build` step.
-- `--strict-build` — treat a failing `sake dev/build` as FAIL rather than WARN. Use when you want the same hard gate GHA enforces.
-- `--strict-lint` — treat failing phpcs/phpstan/eslint as FAIL rather than WARN. Off by default: style/static-analysis findings surface in the SUMMARY and no longer gate a push, while phpunit/composer-install/build breaks still FAIL.
+- `--strict` — escalate **every** check to FAIL on a non-zero exit, restoring hard-gating for the whole run in one flag. Implies `--strict-build` and `--strict-lint`. Use when you want the same hard gate GHA enforces, or before a push you want a real pass/fail on.
+- `--strict-build` — treat a failing `sake dev/build` as FAIL rather than WARN, without escalating anything else. A subset of `--strict`.
+- `--strict-lint` — treat failing phpcs/phpstan/eslint as FAIL rather than WARN, without escalating anything else. A subset of `--strict`.
 - `--fresh-deps` — force a real `composer install` even when `vendor/` exists. Mirrors GHA's clean-install behaviour; slower and mutates `vendor/`. Use before a PR to verify a clean dependency resolution.
 - `--with-behat` — also run Behat (off by default; it needs a browser + chromedriver).
 - `--with-shellcheck` — force shellcheck even without a `.shellcheckrc`.
@@ -83,12 +90,15 @@ When a project has `.ddev/config.yaml`, **PHP** checks run via `ddev exec` and *
 
 ## Reading the result
 
-The script ends with a `SUMMARY` block listing every check as PASS / FAIL / WARN / SKIP, then an `AUTO-FIX CHANGES` section (`git diff --stat`) showing any files a fixer mutated. Exit code is non-zero if anything FAILed.
+The script ends with a `SUMMARY` block listing every check as PASS / FAIL / WARN / SKIP, then an `AUTO-FIX CHANGES` section (`git diff --stat`) showing any files a fixer mutated.
+
+**A default (no-flag) run exits `0` even when real checks find real problems** — findings report WARN, not FAIL, unless escalated with `--strict` (or a scoped `--strict-build` / `--strict-lint`). The only thing that FAILs by default is a broken local-ci setup itself (a malformed `.local-ci.json`). **Read the SUMMARY text, not just the exit code** — a clean exit code no longer means a clean SUMMARY. Any automation that only checks the exit code will silently treat a WARN-covered failure as clean.
 
 When augmenting a review:
 1. Run `local-ci.sh` and capture the summary.
 2. If auto-fixes changed files, review that diff — those are real edits to your working tree.
-3. Carry FAIL/WARN items into the review as concrete findings the LLM pass can then explain or contextualise.
+3. Carry FAIL/WARN items into the review as concrete findings the LLM pass can then explain or contextualise. WARN is not a green gate for "done" — investigate it — even though it doesn't block a push.
+4. Before a merge or a push you want a hard guarantee on, re-run with `--strict`.
 
 ## Status marker and the git-push gate
 
@@ -99,6 +109,8 @@ sha=<HEAD-at-run> result=<PASS|FAIL|WARN|NONE> ts=<epoch>
 ```
 
 `scripts/git-push-gate.sh` is a Claude Code `PreToolUse` (Bash) hook that consumes the marker and blocks `git push` only when the last recorded run **FAILed**, or a recorded **PASS** is stale or not an ancestor of HEAD. A PASS is valid at HEAD, or at an ancestor of HEAD for 4 hours (covers the run-ci, commit, push flow). A **missing marker** (no local-ci run recorded) and a **WARN** result both **allow the push** — WARN still isn't a green gate for "done" (investigate before declaring done), but it no longer blocks the push itself; a marker being missing means CI was never run against this repo, which shouldn't be able to trap a push behind a check that was never kicked off. The marker is stamped per repo: a run against one repo never green-lights another, and runs where nothing executed record `NONE`, not `PASS`.
+
+Since every check is WARN-by-default, a **default run's marker is `PASS` or `WARN` — never `FAIL`** (only a broken `.local-ci.json` setup, or `--strict`/`-build`/`-lint`, can produce a FAIL marker). In practice this means the push gate is opt-in gating too: run without flags to see where things stand without risking a blocked push, or run with `--strict` when you want a marker that can actually block.
 
 The command is parsed with a shell tokenizer, not a regex, so quoted `-C` paths, paths with spaces, `git -c <cfg>` options, multiple pushes in one compound command, and strings that merely mention "git push" are handled correctly. Known fail-open cases, by design: `jq` or `python3` missing, and git aliases that expand to push. Do not treat the gate as a security boundary; it is a workflow guard.
 
@@ -112,8 +124,9 @@ Bypass for an investigated, genuinely benign case: prefix the push with `SKIP_CI
 
 ## Notes
 
+- **Behavior change:** every check used to hard-FAIL (non-zero exit) by default except phpcs/phpstan/JS-lint/dev-build. As of this change, **all checks are WARN-by-default** and a no-flag run exits `0` even with real failures. Any script or CI wrapper that invoked `local-ci.sh` and relied on a non-zero exit in default (no-flag) mode needs `--strict` added to preserve the old behavior.
 - **`composer validate` and `composer install --dry-run` run automatically** on every PHP project — these are the same checks GHA performs implicitly when building the environment. If `vendor/` is missing, a real install runs instead. Use `--fresh-deps` for a full clean-install mirror.
-- `composer validate` runs with `--strict`, which also surfaces recommendation-level warnings (loose version constraints, a stray `version` field, etc.), not just real problems (malformed json, out-of-sync lock) — and both share the same non-zero exit code. If `--strict` fails, the script re-checks with a plain (non-strict) `composer validate`: still non-zero means a genuine problem and stays a hard FAIL; exit 0 means the only issue was a --strict-only warning, which records WARN instead. WARN surfaces in the SUMMARY and no longer blocks `git push` via the push gate (see below), but is still worth investigating before declaring the change done.
-- `dev/build` failure is WARN by default because phpunit can sometimes self-bootstrap from its own bootstrap file. Pass `--strict-build` to make it a hard gate.
+- `composer validate` runs with `--strict`, which also surfaces recommendation-level warnings (loose version constraints, a stray `version` field, etc.), not just real problems (malformed json, out-of-sync lock) — and both share the same non-zero exit code. If `--strict` fails, the script re-checks with a plain (non-strict) `composer validate`: still non-zero means a genuine problem and records WARN (FAIL with `--strict`); exit 0 means the only issue was a --strict-only warning, which always records WARN. WARN surfaces in the SUMMARY and no longer blocks `git push` via the push gate (see below), but is still worth investigating before declaring the change done.
+- `dev/build` failure is WARN by default because phpunit can sometimes self-bootstrap from its own bootstrap file. Pass `--strict-build` (or `--strict`) to make it a hard gate.
 - The script never commits. Auto-fixes are left in the working tree for you to review and commit.
 - A project with no recognised configs reports "nothing to run" rather than erroring.
