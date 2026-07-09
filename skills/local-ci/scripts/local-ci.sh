@@ -19,9 +19,13 @@
 #                      restores hard-gating for the whole run. Implies
 #                      --strict-build and --strict-lint.
 #   --strict-build     Treat a failing `sake dev/build` as FAIL (default: WARN).
+#                      A subset of --strict.
 #   --strict-lint      Treat failing phpcs/phpstan/eslint lint as FAIL
-#                      (default: WARN — style/static-analysis findings surface
-#                      without gating a push; real test/build breaks still FAIL).
+#                      (default: WARN). A subset of --strict. Every other
+#                      check (phpunit, composer install, JS/Python/shell/
+#                      custom checks, dev/build) is ALSO WARN-by-default now
+#                      — use --strict-build / --strict / plain --strict for
+#                      those, not --strict-lint.
 #   --fresh-deps       Force a real `composer install` even when vendor/ exists
 #                      (mirrors GHA's clean-install behaviour; slower, mutates vendor/).
 #   --with-behat       Also run Behat (behat.yml) — opt-in; needs a browser/driver.
@@ -130,13 +134,37 @@ effective_sev() { # category
   esac
 }
 
+# Record PASS/<severity> for a check that already ran, given its <category>.
+# Used both by run_check (below) and by inline checks that don't shell out
+# through it (composer validate/install). The WARN message names the exact
+# flag(s) that would escalate this specific category, not just bare --strict
+# — re-running with --strict also escalates the other two categories, which
+# surprises anyone who only meant to gate on, say, lint.
+record_sev() { # label category
+  local label="$1" category="$2" hint
+  if [ "$(effective_sev "$category")" = WARN ]; then
+    case "$category" in
+      lint)  hint="--strict-lint or --strict" ;;
+      build) hint="--strict-build or --strict" ;;
+      *)     hint="--strict" ;;
+    esac
+    record WARN "$label (not gating; re-run with $hint to gate)"
+  else
+    record FAIL "$label"
+  fi
+}
+
 # Run a command, record PASS/<severity> under a label. Extra args after label
 # are the command. Honours the per-dir PHP runner prefix already baked into
 # the command. <category> (lint/build/gate) resolves to WARN or FAIL via
 # effective_sev — every check is WARN-by-default; pass --strict (or the
-# matching --strict-* variant) to gate on it.
+# matching --strict-* variant) to gate on it. Returns 1 on a non-PASS result
+# (regardless of whether it was recorded as WARN or FAIL) so a caller that
+# needs to know "did the underlying command actually succeed" — e.g. to
+# decide whether skipping dependent checks is warranted — doesn't have to
+# infer it from a side effect (a directory existing, a file being written).
 run_check() { # label category cmd...
-  local label="$1" category="$2" sev; shift 2
+  local label="$1" category="$2"; shift 2
   hdr "$label"
   if [ "$DRY" -eq 1 ]; then
     printf '   \033[90m[dry-run] %s\033[0m\n' "$*"
@@ -147,12 +175,8 @@ run_check() { # label category cmd...
     record PASS "$label"
     return 0
   fi
-  sev="$(effective_sev "$category")"
-  if [ "$sev" = WARN ]; then
-    record WARN "$label (not gating; re-run with --strict to gate)"
-  else
-    record FAIL "$label"
-  fi
+  record_sev "$label" "$category"
+  return 1
 }
 
 # ----- detect candidate dirs --------------------------------------------
@@ -217,7 +241,7 @@ php_checks() { # dir
       elif bash -c "$CC validate --no-check-publish" >/dev/null 2>&1; then
         record WARN "PHP[$d]: composer validate (strict warnings — not gating)"
       else
-        record "$(effective_sev gate)" "PHP[$d]: composer validate"
+        record_sev "PHP[$d]: composer validate" gate
       fi
 
       if [ "$FRESH_DEPS" -eq 1 ] || [ ! -d vendor ]; then
@@ -228,7 +252,12 @@ php_checks() { # dir
         elif bash -c "$CC install --no-interaction --prefer-dist"; then
           record PASS "PHP[$d]: composer install"
         else
-          record "$(effective_sev gate)" "PHP[$d]: composer install"
+          record_sev "PHP[$d]: composer install" gate
+          # Without vendor/, dev/build, phpunit, phpcs, and phpstan can't run
+          # for this dir — record that explicitly so a WARN-only run doesn't
+          # look clean by omission (they'd otherwise just be absent from the
+          # SUMMARY with no indication they were skipped, not merely unused).
+          record SKIP "PHP[$d]: dev/build, phpunit, phpcs, phpstan (composer install did not succeed)"
           return 0
         fi
       else
@@ -323,13 +352,23 @@ js_checks() { # dir
     fi
 
     if [ ! -d node_modules ]; then
+      # Skip remaining JS checks only on a genuine install failure (run_check
+      # returns 1) — not on `[ -d node_modules ]` afterward, which false-
+      # positives when package.json declares no dependencies at all: install
+      # then legitimately succeeds without ever creating node_modules/.
+      # Record the skip explicitly (see the matching composer-install
+      # comment above) so a WARN-only run doesn't look clean by omission.
       if [ -f package-lock.json ]; then
-        run_check "JS[$d]: install" gate bash -c 'npm ci || npm install'
+        run_check "JS[$d]: install" gate bash -c 'npm ci || npm install' || {
+          record SKIP "JS[$d]: lint, build, test (install did not succeed)"
+          return 0
+        }
       else
-        run_check "JS[$d]: install" gate npm install
+        run_check "JS[$d]: install" gate npm install || {
+          record SKIP "JS[$d]: lint, build, test (install did not succeed)"
+          return 0
+        }
       fi
-      # If install failed, node_modules still absent — skip remaining JS checks.
-      [ -d node_modules ] || return 0
     fi
 
     # eslint auto-fix then lint
@@ -626,9 +665,11 @@ fi
 echo
 if [ "$DRY" -eq 1 ]; then
   echo "Result: dry-run — listed planned checks, executed nothing."
-elif [ "$FAILED" -eq 0 ]; then
-  echo "Result: all checks passed."
-else
+elif [ "$FAILED" -ne 0 ]; then
   echo "Result: one or more checks FAILED."
+elif grep -q '^WARN' "$RESULTS_FILE" 2>/dev/null; then
+  echo "Result: no FAILs, but findings are WARN — read the SUMMARY above (re-run with --strict to gate)."
+else
+  echo "Result: all checks passed."
 fi
 exit "$FAILED"

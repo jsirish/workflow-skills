@@ -92,7 +92,9 @@ When a project has `.ddev/config.yaml`, **PHP** checks run via `ddev exec` and *
 
 The script ends with a `SUMMARY` block listing every check as PASS / FAIL / WARN / SKIP, then an `AUTO-FIX CHANGES` section (`git diff --stat`) showing any files a fixer mutated.
 
-**A default (no-flag) run exits `0` even when real checks find real problems** — findings report WARN, not FAIL, unless escalated with `--strict` (or a scoped `--strict-build` / `--strict-lint`). The only thing that FAILs by default is a broken local-ci setup itself (a malformed `.local-ci.json`). **Read the SUMMARY text, not just the exit code** — a clean exit code no longer means a clean SUMMARY. Any automation that only checks the exit code will silently treat a WARN-covered failure as clean.
+**A default (no-flag) run exits `0` even when real checks find real problems** — findings report WARN, not FAIL, unless escalated with `--strict` (or a scoped `--strict-build` / `--strict-lint`). The only thing that FAILs by default is a broken local-ci setup itself (a malformed `.local-ci.json`). **Read the SUMMARY text, not just the exit code** — a clean exit code no longer means a clean SUMMARY. Any automation that only checks the exit code will silently treat a WARN-covered failure as clean. The closing line reflects this too: `Result: all checks passed.` only when the SUMMARY has no WARN or FAIL rows; a WARN-only run instead prints `Result: no FAILs, but findings are WARN — read the SUMMARY above`.
+
+A `composer install` or `npm install` failure (WARN by default) also short-circuits the checks that depend on it for that dir (dev/build, phpunit, phpcs, phpstan; or JS lint/build/test) — those show up as an explicit `SKIP …(install did not succeed)` row rather than silently vanishing from the SUMMARY.
 
 When augmenting a review:
 1. Run `local-ci.sh` and capture the summary.
