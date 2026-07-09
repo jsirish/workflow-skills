@@ -123,8 +123,7 @@ block() { # message; prints guidance and exits 2
 gate_dir() { # dir (resolved)
   local dir="$1"
   "$GIT" -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 0
-  local top gitdir marker
-  top=$("$GIT" -C "$dir" rev-parse --show-toplevel 2>/dev/null) || return 0
+  local gitdir marker
   gitdir=$("$GIT" -C "$dir" rev-parse --absolute-git-dir 2>/dev/null) || return 0
   marker="$gitdir/local-ci-status"
 
