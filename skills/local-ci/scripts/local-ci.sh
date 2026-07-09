@@ -16,6 +16,9 @@
 #                      report only.
 #   --no-build         Skip the SilverStripe `sake dev/build` step.
 #   --strict-build     Treat a failing `sake dev/build` as FAIL (default: WARN).
+#   --strict-lint      Treat failing phpcs/phpstan/eslint lint as FAIL
+#                      (default: WARN — style/static-analysis findings surface
+#                      without gating a push; real test/build breaks still FAIL).
 #   --fresh-deps       Force a real `composer install` even when vendor/ exists
 #                      (mirrors GHA's clean-install behaviour; slower, mutates vendor/).
 #   --with-behat       Also run Behat (behat.yml) — opt-in; needs a browser/driver.
@@ -40,6 +43,7 @@ set -uo pipefail
 DO_FIX=1
 DO_BUILD=1
 STRICT_BUILD=0
+STRICT_LINT=0
 FRESH_DEPS=0
 WITH_BEHAT=0
 WITH_SHELLCHECK=0
@@ -51,6 +55,7 @@ while [ $# -gt 0 ]; do
     --no-fix)           DO_FIX=0 ;;
     --no-build)         DO_BUILD=0 ;;
     --strict-build)     STRICT_BUILD=1 ;;
+    --strict-lint)      STRICT_LINT=1 ;;
     --fresh-deps)       FRESH_DEPS=1 ;;
     --with-behat)       WITH_BEHAT=1 ;;
     --with-shellcheck)  WITH_SHELLCHECK=1 ;;
@@ -95,10 +100,13 @@ hdr() {
   printf '\033[1m========================================================================\033[0m\n'
 }
 
-# Run a command, record PASS/FAIL under a label. Extra args after label are the
-# command. Honours the per-dir PHP runner prefix already baked into the command.
-run_check() { # label cmd...
-  local label="$1"; shift
+# Run a command, record PASS/<severity> under a label. Extra args after label
+# are the command. Honours the per-dir PHP runner prefix already baked into
+# the command. <severity> defaults to FAIL; pass WARN for checks that
+# shouldn't gate on their own (e.g. lint/static-analysis), which record WARN
+# on a non-zero exit unless STRICT_LINT=1 (--strict-lint) escalates it to FAIL.
+run_check() { # label severity cmd...
+  local label="$1" severity="$2"; shift 2
   hdr "$label"
   if [ "$DRY" -eq 1 ]; then
     printf '   \033[90m[dry-run] %s\033[0m\n' "$*"
@@ -107,6 +115,8 @@ run_check() { # label cmd...
   fi
   if "$@"; then
     record PASS "$label"
+  elif [ "$severity" = "WARN" ] && [ "$STRICT_LINT" -ne 1 ]; then
+    record WARN "$label (lint finding — not gating; re-run with --strict-lint to gate)"
   else
     record FAIL "$label"
   fi
@@ -189,7 +199,7 @@ php_checks() { # dir
           return 0
         fi
       else
-        run_check "PHP[$d]: composer install (dry-run)" bash -c "$CC install --dry-run --no-interaction"
+        run_check "PHP[$d]: composer install (dry-run)" FAIL bash -c "$CC install --dry-run --no-interaction"
       fi
     fi
 
@@ -220,7 +230,7 @@ php_checks() { # dir
     # reflects the skipped install, not a real missing-binary problem.
     local unit_cfg; unit_cfg="$(first_existing phpunit.xml phpunit.xml.dist || true)"
     if [ -n "$unit_cfg" ] && [ -x vendor/bin/phpunit ]; then
-      run_check "PHP[$d]: phpunit" bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/phpunit --colors=always; else vendor/bin/phpunit --colors=always; fi'
+      run_check "PHP[$d]: phpunit" FAIL bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/phpunit --colors=always; else vendor/bin/phpunit --colors=always; fi'
     elif [ -n "$unit_cfg" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpunit (adopted via config but vendor/bin/phpunit missing)"
     fi
@@ -239,7 +249,7 @@ php_checks() { # dir
         # shellcheck disable=SC2086  # intentional word-split of $paths
         run vendor/bin/phpcbf --standard="$std" $paths || true
       fi
-      run_check "PHP[$d]: phpcs" bash -c '
+      run_check "PHP[$d]: phpcs" WARN bash -c '
         if [ -n "'"$PRE"'" ]; then R="'"$PRE"' "; else R=""; fi
         $R vendor/bin/phpcs -s --report=summary --standard="'"$std"'" --extensions=php,inc --ignore=autoload.php --ignore=vendor/ '"$paths"''
     elif [ -n "$std" ] && [ -d vendor ]; then
@@ -249,14 +259,14 @@ php_checks() { # dir
     # PHPStan
     local stan_cfg; stan_cfg="$(first_existing phpstan.neon phpstan.neon.dist || true)"
     if [ -n "$stan_cfg" ] && [ -x vendor/bin/phpstan ]; then
-      run_check "PHP[$d]: phpstan" bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/phpstan analyse --no-progress; else vendor/bin/phpstan analyse --no-progress; fi'
+      run_check "PHP[$d]: phpstan" WARN bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/phpstan analyse --no-progress; else vendor/bin/phpstan analyse --no-progress; fi'
     elif [ -n "$stan_cfg" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpstan (adopted via config but vendor/bin/phpstan missing)"
     fi
 
     # Behat (opt-in)
     if [ "$WITH_BEHAT" -eq 1 ] && [ -f behat.yml ] && [ -x vendor/bin/behat ]; then
-      run_check "PHP[$d]: behat" bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/behat --colors --strict; else vendor/bin/behat --colors --strict; fi'
+      run_check "PHP[$d]: behat" FAIL bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/behat --colors --strict; else vendor/bin/behat --colors --strict; fi'
     fi
   )
 }
@@ -281,9 +291,9 @@ js_checks() { # dir
 
     if [ ! -d node_modules ]; then
       if [ -f package-lock.json ]; then
-        run_check "JS[$d]: install" bash -c 'npm ci || npm install'
+        run_check "JS[$d]: install" FAIL bash -c 'npm ci || npm install'
       else
-        run_check "JS[$d]: install" npm install
+        run_check "JS[$d]: install" FAIL npm install
       fi
       # If install failed, node_modules still absent — skip remaining JS checks.
       [ -d node_modules ] || return 0
@@ -298,16 +308,16 @@ js_checks() { # dir
         X bash -c 'npx --no-install eslint . --fix --no-error-on-unmatched-pattern 2>/dev/null || true'
       fi
       if [ "$HAS_LINT_SCRIPT" -eq 1 ]; then
-        run_check "JS[$d]: lint" npm run lint
+        run_check "JS[$d]: lint" WARN npm run lint
       elif [ "$HAS_ESLINT_CFG" -eq 1 ] && command -v npx >/dev/null 2>&1; then
         # Flat/legacy eslint config present but no lint script — run eslint directly.
-        run_check "JS[$d]: lint (eslint)" bash -c 'npx --no-install eslint . --no-error-on-unmatched-pattern'
+        run_check "JS[$d]: lint (eslint)" WARN bash -c 'npx --no-install eslint . --no-error-on-unmatched-pattern'
       fi
     fi
 
     # build
     if has_npm_script build; then
-      run_check "JS[$d]: build" npm run build
+      run_check "JS[$d]: build" FAIL npm run build
     fi
 
     # test (skip the npm placeholder)
@@ -315,7 +325,7 @@ js_checks() { # dir
       if node -e 'const t=(require("./package.json").scripts||{}).test||"";process.exit(/no test specified/.test(t)?0:1)' 2>/dev/null; then
         record SKIP "JS[$d]: test (placeholder script)"
       else
-        run_check "JS[$d]: test" npm test
+        run_check "JS[$d]: test" FAIL npm test
       fi
     fi
   )
@@ -364,7 +374,7 @@ py_checks() { # dir
         hdr "PY[$d]: ruff --fix"
         X bash -c "$RUFF check --fix . || true"
       fi
-      run_check "PY[$d]: ruff" bash -c "$RUFF check ."
+      run_check "PY[$d]: ruff" FAIL bash -c "$RUFF check ."
     elif [ "$ruff_adopted" -eq 1 ]; then
       record WARN "PY[$d]: ruff (adopted via config but ruff is not installed)"
     fi
@@ -382,7 +392,7 @@ py_checks() { # dir
       # Recursive test detection: test files may live in nested packages
       # rather than at the top level or in a tests/ dir.
       if [ -d tests ] || [ -n "$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist -o -name site-packages \) -prune -o \( -name 'test_*.py' -o -name '*_test.py' \) -type f -print 2>/dev/null | head -1)" ]; then
-        run_check "PY[$d]: pytest" bash -c "$PYTEST -q"
+        run_check "PY[$d]: pytest" FAIL bash -c "$PYTEST -q"
       else
         record SKIP "PY[$d]: pytest (no tests found)"
       fi
@@ -458,7 +468,7 @@ SHFILES
     # Dialect is autodetected per-file from its shebang; a project needing a
     # forced dialect sets `shell=sh` (or bash/dash/ksh) in its .shellcheckrc.
     # `--` guards a file whose name happens to start with `-`.
-    run_check "shell[$d]: shellcheck" shellcheck -- "${sh_files[@]}"
+    run_check "shell[$d]: shellcheck" FAIL shellcheck -- "${sh_files[@]}"
   )
 }
 
@@ -501,7 +511,7 @@ custom_checks() { # dir
         record FAIL "custom[$d]: ${label:-unnamed check} (malformed — missing \"run\")"
         continue
       fi
-      run_check "custom[$d]: ${label:-unnamed check}" bash -c "$cmd"
+      run_check "custom[$d]: ${label:-unnamed check}" FAIL bash -c "$cmd"
     done < <(jq -r '.checks[] | [(.label // ""), (.run // "")] | @tsv' .local-ci.json)
   )
 }
