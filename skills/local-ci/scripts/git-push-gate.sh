@@ -51,13 +51,23 @@
 # statement, a rare edge case. `~` and `$VAR` in a `cd` or `-C`/
 # `--work-tree` argument are expanded before resolution. Every resolved
 # `cd` target is checked against the real filesystem before being trusted,
-# EXCEPT when its exact target (or a path under it) was the destination of
-# a `mkdir`, `git clone`, or `git worktree add` seen earlier in the same
-# compound command - that specific not-yet-existing directory is then
-# trusted, since it will exist by the time the `cd` actually runs
-# (`mkdir foo && cd foo && git push`); an unrelated or typoed `cd`
-# elsewhere in the same command is not covered by this and still needs to
-# already exist. `mkdir -p a/b/c` also registers every intermediate
+# EXCEPT when its exact target was the destination of a `mkdir`, `git
+# clone`, or `git worktree add` seen earlier in the same compound command
+# (an EXACT match only, not a path under it - see resolve_cd) - that
+# specific not-yet-existing directory is then trusted, since it will exist
+# by the time the `cd` actually runs (`mkdir foo && cd foo && git push`);
+# an unrelated or typoed `cd` elsewhere in the same command is not covered
+# by this and still needs to already exist. Inherent limitation, not
+# fixable here: gate_dir (below) can only check a marker for a directory
+# that already exists on disk, and a directory created earlier IN THE SAME
+# command doesn't exist yet when this hook runs (PreToolUse fires before
+# the shell command executes) - so a push immediately following its own
+# repo's creation (`git clone url newrepo && cd newrepo && git push`) is
+# structurally ungateable: there is no possible prior local-ci run to
+# check for a repo that didn't exist a moment ago. This is not a
+# regression versus not tracking the created dir at all - the alternative
+# is resolving to an unrelated stale directory's marker instead of
+# correctly recognising there's no marker to check yet. `mkdir -p a/b/c` also registers every intermediate
 # ancestor (`a`, `a/b`) as trusted, since -p creates those too; without
 # -p, only the leaf is registered, and only when its immediate parent
 # already exists (a real `mkdir` without -p fails outright otherwise). A
@@ -127,7 +137,11 @@ PUSH_DIRS=$(CLAUDE_HOOK_CMD="$CMD" CLAUDE_HOOK_CWD="$CWD" python3 - <<'PYEOF'
 import os, re, shlex, sys
 
 cmd = os.environ.get("CLAUDE_HOOK_CMD", "")
-cwd = os.environ.get("CLAUDE_HOOK_CWD", ".")
+# abspath (not just the raw value) so a resolved cd/-C/--work-tree target is
+# always OS-absolute even if CLAUDE_HOOK_CWD were ever relative - the bash
+# caller re-prefixes its own $CWD onto any non-absolute line this script
+# prints, so a relative result here would double up into a wrong path.
+cwd = os.path.abspath(os.environ.get("CLAUDE_HOOK_CWD", "."))
 try:
     lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
     lex.whitespace_split = True
@@ -182,15 +196,17 @@ def resolve_cd(base, arg, created_dirs):
     # leaves the shell's directory unchanged, so on failure keep whatever
     # was already tracked (the sentinel below) rather than either trusting
     # the bad value or discarding a previously-good one. Exception: this
-    # exact candidate (or a path under it) was the target of a `mkdir`,
-    # `git clone`, or `git worktree add` seen earlier in the same compound
-    # command - trust_missing by exact/prefix match, not a blanket "some
-    # creator command appeared somewhere earlier" flag, so an unrelated or
-    # typoed `cd` elsewhere in the same command still isn't trusted.
+    # exact candidate was the target of a `mkdir`, `git clone`, or `git
+    # worktree add` seen earlier in the same compound command - trusted by
+    # EXACT match only (register_created already explicitly registers every
+    # ancestor -p creates, or the exact leaf otherwise), not a prefix match:
+    # a prefix match would trust ANY not-yet-existing descendant of a
+    # created dir, including a typoed grandchild that was never actually
+    # created (`mkdir foo && cd foo/nonexistent` would wrongly resolve
+    # instead of correctly falling through to UNCHANGED).
     if os.path.isdir(candidate):
         return candidate
-    trusted = any(candidate == d or candidate.startswith(d + os.sep) for d in created_dirs)
-    if not trusted:
+    if candidate not in created_dirs:
         return "UNCHANGED"
     return candidate
 
