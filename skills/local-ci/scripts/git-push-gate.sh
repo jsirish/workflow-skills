@@ -34,7 +34,15 @@
 # separate value token (`--git-dir`, `--namespace`, `--super-prefix`,
 # `--config-env`, `--exec-path`) are recognised and their value skipped
 # so they don't desync the flag scan, but they don't affect the resolved
-# directory. `cd`/`git`/`rtk` are matched wherever the token appears (not
+# directory (a contrived case - a value-taking long option with its value
+# OMITTED, immediately followed by a literal "push" token - lets that
+# option's scan consume "push" as its own value and skip gating; this
+# mirrors how git itself would consume that same token, so a command
+# shaped that way isn't a real push to begin with). `git clone`/`git
+# worktree add` options that take a value (`--branch`/`-b`, `--depth`,
+# `--origin`/`-o`; `-b`/`-B`/`--orphan`) are recognised the same way so
+# their value token isn't mistaken for the destination/path argument.
+# `cd`/`git`/`rtk` are matched wherever the token appears (not
 # restricted to command position), so a wrapper before the real command
 # (`time git push`, `env FOO=bar git push`, a newline- or `;`-separated
 # `git push` with no `&&`/`||` before it) is still recognised - the
@@ -126,6 +134,15 @@ ENV_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
 # consumed so the flag-scan loop doesn't mistake the value for a subcommand.
 GIT_LONG_OPTS_WITH_VALUE = {"--git-dir", "--namespace", "--super-prefix", "--config-env", "--exec-path"}
 
+# `git clone`/`git worktree add` options that take a value as a SEPARATE
+# following token, so the destination/path scanner below must skip both the
+# flag and its value, not just the flag - not exhaustive (both commands have
+# many more options), but covers the ones plausible in an agent-run compound
+# command: renaming the branch, shallow depth, remote name, or the new
+# branch a worktree is created on.
+CLONE_OPTS_WITH_VALUE = {"--branch", "-b", "--depth", "--origin", "-o"}
+WORKTREE_ADD_OPTS_WITH_VALUE = {"-b", "-B", "--orphan"}
+
 def is_word_char(ch):
     return ch.isalnum() or ch in "_./~$"
 
@@ -164,6 +181,26 @@ def resolve_cd(base, arg, created_dirs):
     if not trusted:
         return "UNCHANGED"
     return candidate
+
+def register_created(base, val):
+    # Registers the composed target AND every intermediate ancestor between
+    # it and `base` (or cwd) - `mkdir -p a/b/c` also creates `a` and `a/b`,
+    # so a later `cd a/b` should be trusted too, not just `cd a/b/c`. Bounded
+    # to the anchor subtree (base/cwd): an absolute target unrelated to the
+    # anchor (`mkdir /tmp/scratch` while anchor is elsewhere) must not walk
+    # up into shared ancestors like `/tmp` itself and trust everything under it.
+    target = compose(base, val)
+    anchor = os.path.normpath(base if base is not None else cwd)
+    created_dirs.add(target)
+    p = os.path.dirname(target)
+    guard = 0
+    while p not in ("", "/") and p != anchor and p.startswith(anchor + os.sep) and guard < 64:
+        created_dirs.add(p)
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+        guard += 1
 
 out = []
 i, n = 0, len(toks)
@@ -211,7 +248,7 @@ while i < n:
             if t.startswith("-"):
                 i += 1  # flags (-p and unrecognized alike) - best-effort skip
                 continue
-            created_dirs.add(compose(base, t))
+            register_created(base, t)
             i += 1
         continue
 
@@ -322,7 +359,9 @@ while i < n:
         while i < n and toks[i] and (is_word_char(toks[i][0]) or toks[i].startswith("-")):
             t = toks[i]
             if t.startswith("-"):
-                i += 1  # clone options - best-effort skip, values not tracked
+                i += 1
+                if t in CLONE_OPTS_WITH_VALUE and i < n:
+                    i += 1  # also consume this option's separate value token
                 continue
             if url is None:
                 url = t
@@ -337,20 +376,22 @@ while i < n:
                 base_name = base_name[:-4]
             dest = base_name or None
         if dest:
-            created_dirs.add(compose(last_cd_dir, dest))
+            register_created(last_cd_dir, dest)
     elif i < n and toks[i] == "worktree" and i + 1 < n and toks[i + 1] == "add":
         i += 2
         path = None
         while i < n and toks[i]:
             t = toks[i]
             if t.startswith("-"):
-                i += 1  # worktree add options - best-effort skip, values not tracked
+                i += 1
+                if t in WORKTREE_ADD_OPTS_WITH_VALUE and i < n:
+                    i += 1  # also consume this option's separate value token
                 continue
             path = t
             i += 1
             break
         if path:
-            created_dirs.add(compose(last_cd_dir, path))
+            register_created(last_cd_dir, path)
 print("\n".join(out))
 PYEOF
 )
