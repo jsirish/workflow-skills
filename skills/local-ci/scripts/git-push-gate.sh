@@ -69,9 +69,22 @@ except ValueError:
     sys.exit(0)
 
 ENV_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+
+def resolve_cd(base, arg):
+    # ~ and $VAR expansion (shlex does neither); relative args compose onto
+    # the current tracked dir, matching real `cd` behavior; an absolute arg
+    # resets it outright.
+    if arg.startswith("~"):
+        arg = os.path.expanduser(arg)
+    arg = os.path.expandvars(arg)
+    if arg.startswith("/") or base is None:
+        return arg
+    return base.rstrip("/") + "/" + arg
+
 out = []
 i, n = 0, len(toks)
 last_cd_dir = None  # most recent `cd <dir>` statement seen so far, left to right
+cd_stack = []  # last_cd_dir snapshots, pushed/popped across ( ... ) boundaries
 while i < n:
     bypass = False
     while i < n and ENV_RE.match(toks[i]):
@@ -81,14 +94,46 @@ while i < n:
     if i >= n:
         break
     start = i
-    if toks[i] == "cd" and i + 1 < n and not toks[i + 1].startswith("-"):
-        # Track `cd <dir>` as a statement, so a later bare `git push` (no -C)
-        # resolves against it instead of the tool call's original cwd. Real
-        # shell semantics: each `cd` changes the directory for everything
-        # after it, until the next `cd`.
-        last_cd_dir = toks[i + 1]
-        i += 2
+    tk = toks[i]
+
+    # A token made entirely of shell punctuation may bundle a `(`/`)` with
+    # an adjacent separator (shlex emits ");" as one token for
+    # `... ); git push`, not two). Scan its characters for subshell
+    # boundaries: `(` saves the current tracked dir, `)` restores it - a
+    # `cd` inside `( ... )` never affects the outer shell's directory.
+    if tk and not (tk[0].isalnum() or tk[0] in "_./~$-"):
+        for ch in tk:
+            if ch == "(":
+                cd_stack.append(last_cd_dir)
+            elif ch == ")" and cd_stack:
+                last_cd_dir = cd_stack.pop()
+        i += 1
         continue
+
+    if tk == "cd":
+        # Track `cd <dir>` as a statement, so a later bare `git push` (no
+        # -C) resolves against it instead of the tool call's original cwd.
+        j = i + 1
+        arg = None
+        if j < n and toks[j] != "-" and (toks[j][0].isalnum() or toks[j][0] in "_./~$"):
+            arg = toks[j]
+            j += 1
+        elif j < n and toks[j] == "-":
+            j += 1  # `cd -`: swaps to $OLDPWD, not statically known - see below
+        # A `cd <dir> || <fallback>` only takes effect if the cd FAILS,
+        # which we can't know statically - too risky to trust either way.
+        followed_by_or = j < n and toks[j] == "||"
+        if arg is not None and not followed_by_or:
+            last_cd_dir = resolve_cd(last_cd_dir, arg)
+        else:
+            # `cd -`, a bare `cd` (goes to $HOME), or a conditional `cd ... ||`:
+            # can't resolve the resulting directory with confidence. Fall back
+            # to "untracked" (gates the tool call's own .cwd) rather than
+            # risk trusting a stale or wrong one.
+            last_cd_dir = None
+        i = j
+        continue
+
     if toks[i] == "rtk":
         i += 1
         if i < n and toks[i] == "proxy":
