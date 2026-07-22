@@ -163,14 +163,28 @@ GIT_LONG_OPTS_WITH_VALUE = {"--git-dir", "--namespace", "--super-prefix", "--con
 # `git clone`/`git worktree add` options that take a value as a SEPARATE
 # following token, so the destination/path scanner below must skip both the
 # flag and its value, not just the flag - not exhaustive (both commands have
-# many more options), but covers the ones plausible in an agent-run compound
-# command: renaming the branch, shallow depth, remote name, or the new
-# branch a worktree is created on.
-CLONE_OPTS_WITH_VALUE = {"--branch", "-b", "--depth", "--origin", "-o"}
-WORKTREE_ADD_OPTS_WITH_VALUE = {"-b", "-B", "--orphan"}
+# more options still), but covers everything plausible in an agent-run
+# compound command: branch/depth/remote selection, template/reference repos,
+# git-dir relocation, shallow-clone tuning, parallelism, and the new branch
+# a worktree is created on.
+CLONE_OPTS_WITH_VALUE = {
+    "--branch", "-b", "--depth", "--origin", "-o", "--config", "-c",
+    "--template", "--reference", "--reference-if-able", "--separate-git-dir",
+    "--shallow-since", "--shallow-exclude", "--jobs", "-j", "--filter",
+    "--server-option", "--upload-pack", "-u",
+}
+WORKTREE_ADD_OPTS_WITH_VALUE = {"-b", "-B", "--orphan", "--reason"}
 
 def is_word_char(ch):
     return ch.isalnum() or ch in "_./~$"
+
+def is_statement_word(tok):
+    # A recognized statement-starting keyword - the mkdir/clone/worktree-add
+    # positional-arg scanners must stop here rather than swallow it as a
+    # bare positional arg, or a following statement separated only by
+    # whitespace/newline (no &&/;/||) - `mkdir foo\ngit push` - loses its
+    # `git` token entirely and the trailing push goes ungated.
+    return tok in ("cd", "git", "rtk", "mkdir")
 
 def compose(base, val):
     # Compose a (possibly relative) directory value onto the currently
@@ -263,12 +277,16 @@ while i < n:
     # does NOT clear the marker, so it stays pending until either an
     # actual `cd` consumes it or a real `&&`/`;` supersedes it - e.g.
     # `true || >/dev/null cd dir && git push` still has `cd dir`
-    # conditional on `true` having failed.
+    # conditional on `true` having failed. Substring (not exact-match)
+    # checks, since shlex bundles adjacent punctuation into one token
+    # (`); ` after a subshell close becomes literally ");" - one token,
+    # not two) - `cmd1 || (cmd2); cd x` must still clear on that bundled
+    # ");" the same as a standalone ";" would.
     if not is_word_char(tk[0]):
-        if tk == "||":
-            prev_was_or = True
-        elif tk in ("&&", ";"):
+        if ";" in tk or "&&" in tk:
             prev_was_or = False
+        if "||" in tk:
+            prev_was_or = True
         for ch in tk:
             if ch == "(":
                 cd_stack.append(last_cd_dir)
@@ -285,7 +303,7 @@ while i < n:
         # ancestor doesn't already exist) - so only trust intermediate
         # ancestors as "will exist" when -p was actually passed.
         saw_p = False
-        while i < n and toks[i] and (is_word_char(toks[i][0]) or toks[i].startswith("-")):
+        while i < n and toks[i] and (is_word_char(toks[i][0]) or toks[i].startswith("-")) and not is_statement_word(toks[i]):
             t = toks[i]
             if t.startswith("-"):
                 if t in ("-p", "--parents") or (not t.startswith("--") and "p" in t[1:]):
@@ -421,7 +439,7 @@ while i < n:
         i += 1
         url = None
         dest = None
-        while i < n and toks[i] and (is_word_char(toks[i][0]) or toks[i].startswith("-")):
+        while i < n and toks[i] and (is_word_char(toks[i][0]) or toks[i].startswith("-")) and not is_statement_word(toks[i]):
             t = toks[i]
             if t.startswith("-"):
                 i += 1
@@ -445,7 +463,7 @@ while i < n:
     elif i < n and toks[i] == "worktree" and i + 1 < n and toks[i + 1] == "add":
         i += 2
         path = None
-        while i < n and toks[i]:
+        while i < n and toks[i] and not is_statement_word(toks[i]):
             t = toks[i]
             if t.startswith("-"):
                 i += 1
