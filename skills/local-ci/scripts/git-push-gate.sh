@@ -57,9 +57,21 @@
 # trusted, since it will exist by the time the `cd` actually runs
 # (`mkdir foo && cd foo && git push`); an unrelated or typoed `cd`
 # elsewhere in the same command is not covered by this and still needs to
-# already exist. A `cd` on either side of `||` is left untrusted (neither
-# "does the LHS fail" nor "did the prior statement fail, making the RHS
-# run at all" is known statically). Whenever a `cd`'s effect still can't
+# already exist. `mkdir -p a/b/c` also registers every intermediate
+# ancestor (`a`, `a/b`) as trusted, since -p creates those too; without
+# -p, only the leaf is registered, and only when its immediate parent
+# already exists (a real `mkdir` without -p fails outright otherwise). A
+# `git clone`/`git worktree add` destination is composed against the
+# git invocation's own resolved directory (any `-C`/`--work-tree` on that
+# same invocation), not just whatever a prior bare `cd` left tracked. A
+# `cd` immediately followed by `||` is still resolved normally (if the
+# target verifiably exists, the cd will succeed and `|| fallback` never
+# runs); a `cd` that is itself the right-hand side of a `||` is left
+# untrusted regardless of whether ITS target exists, since whether it
+# runs at all depends on an earlier, unrelated statement's success -
+# that "right after `||`" marker persists through any non-`&&`/`;` token
+# in between (a redirect, an unrelated word) rather than being cleared by
+# the first thing that isn't itself a `cd`. Whenever a `cd`'s effect still can't
 # be confidently resolved - an unresolved `$VAR` (only the hook process's
 # own environment is consulted; a bare `NAME=value` statement assigned
 # earlier in the same not-yet-executed command is invisible to this static
@@ -156,11 +168,11 @@ def compose(base, val):
     if val.startswith("~"):
         val = os.path.expanduser(val)
     val = os.path.expandvars(val)
-    if val.startswith("/"):
-        return os.path.normpath(val)
     b = base if base is not None else cwd
-    result = (b.rstrip("/") + "/" + val) if b not in ("", ".") else val
-    return os.path.normpath(result)
+    # os.path.join already discards `b` when `val` is absolute, and handles
+    # the base-is-""/"." cases the same way a manual concat would - no need
+    # to special-case either by hand.
+    return os.path.normpath(os.path.join(b, val))
 
 def resolve_cd(base, arg, created_dirs):
     candidate = compose(base, arg)
@@ -222,16 +234,25 @@ while i < n:
         i += 1
         continue
 
-    was_or, prev_was_or = prev_was_or, False
-
     # A token made entirely of shell punctuation may bundle a `(`/`)` with
     # an adjacent separator (shlex emits ");" as one token for
     # `... ); git push`, not two). Scan its characters for subshell
     # boundaries: `(` saves the current tracked dir, `)` restores it - a
     # `cd` inside `( ... )` never affects the outer shell's directory.
+    # `||` marks the pending "conditional" marker (`prev_was_or`, consumed
+    # by the `cd` branch below as `was_or`); `&&`/`;` clear it (a new,
+    # unconditional statement has started). Any other token in between -
+    # punctuation like a redirect, or an unrelated word like a redirect's
+    # target filename or a different command entirely - is left alone and
+    # does NOT clear the marker, so it stays pending until either an
+    # actual `cd` consumes it or a real `&&`/`;` supersedes it - e.g.
+    # `true || >/dev/null cd dir && git push` still has `cd dir`
+    # conditional on `true` having failed.
     if not is_word_char(tk[0]):
         if tk == "||":
             prev_was_or = True
+        elif tk in ("&&", ";"):
+            prev_was_or = False
         for ch in tk:
             if ch == "(":
                 cd_stack.append(last_cd_dir)
@@ -243,12 +264,29 @@ while i < n:
     if tk == "mkdir":
         i += 1
         base = last_cd_dir
+        # `-p`/`--parents` makes mkdir create every missing intermediate
+        # too; without it, mkdir only creates the leaf (and FAILS if an
+        # ancestor doesn't already exist) - so only trust intermediate
+        # ancestors as "will exist" when -p was actually passed.
+        saw_p = False
         while i < n and toks[i] and (is_word_char(toks[i][0]) or toks[i].startswith("-")):
             t = toks[i]
             if t.startswith("-"):
+                if t in ("-p", "--parents") or (not t.startswith("--") and "p" in t[1:]):
+                    saw_p = True
                 i += 1  # flags (-p and unrecognized alike) - best-effort skip
                 continue
-            register_created(base, t)
+            if saw_p:
+                register_created(base, t)
+            else:
+                # Without -p, mkdir creates only the leaf, and FAILS
+                # entirely if its immediate parent doesn't already exist -
+                # so only trust the leaf when that parent is real; a
+                # not-yet-existing parent means this mkdir would itself
+                # fail in a real shell, so nothing after it is trustworthy.
+                target = compose(base, t)
+                if os.path.isdir(os.path.dirname(target)):
+                    created_dirs.add(target)
             i += 1
         continue
 
@@ -262,6 +300,9 @@ while i < n:
     # statement - accepted as a rare, low-impact edge case; the tool is
     # documented as a workflow guard, not a security boundary.
     if tk == "cd":
+        # Consumes the pending "right after ||" marker regardless of trust
+        # outcome below - it applies to this one statement only.
+        was_or, prev_was_or = prev_was_or, False
         j = i + 1
         # Skip recognized flags before the directory argument: -L/-P
         # (POSIX logical-vs-physical) and -e/-@ (macOS). An unrecognized
@@ -284,12 +325,16 @@ while i < n:
             j += 1
         else:
             resolvable = False  # bare `cd`, or a false match with no valid arg following
-        # A `cd <dir> || <fallback>` only takes effect if the cd FAILS, and a
-        # `cd` that is itself the right-hand side of a preceding `||` only
-        # takes effect if THAT PRIOR statement failed - neither is knowable
-        # statically, so both sides of `||` are left untrusted.
-        followed_by_or = j < n and toks[j] == "||"
-        if resolvable and arg is not None and not followed_by_or and not was_or:
+        # A `cd <dir> || <fallback>` only takes effect if the cd FAILS - but
+        # if `<dir>` verifiably exists right now, the cd WILL succeed (same
+        # real-filesystem trust resolve_cd already applies everywhere else),
+        # so `||`'s presence on the right doesn't need special-casing here;
+        # resolve_cd's own isdir/created_dirs check is the arbiter. A `cd`
+        # that is itself the right-hand side of a preceding `||` is
+        # different: whether it runs AT ALL depends on whether the prior,
+        # unrelated statement failed, which isn't knowable regardless of
+        # whether this cd's own target exists - so that side stays untrusted.
+        if resolvable and arg is not None and not was_or:
             resolved = resolve_cd(last_cd_dir, arg, created_dirs)
             if resolved != "UNCHANGED":
                 last_cd_dir = resolved
@@ -352,7 +397,11 @@ while i < n:
     elif i < n and toks[i] == "clone":
         # Registers the clone's actual destination dir (explicit arg, or
         # inferred from the URL's basename when omitted) rather than a
-        # blanket "a clone happened somewhere" flag.
+        # blanket "a clone happened somewhere" flag. Composed against
+        # `cdir` (this invocation's own -C/--work-tree-resolved dir, which
+        # already falls back to last_cd_dir when neither was given), not
+        # last_cd_dir directly - `git -C /elsewhere clone URL` clones
+        # relative to /elsewhere, not wherever a prior bare `cd` left off.
         i += 1
         url = None
         dest = None
@@ -376,7 +425,7 @@ while i < n:
                 base_name = base_name[:-4]
             dest = base_name or None
         if dest:
-            register_created(last_cd_dir, dest)
+            register_created(cdir, dest)
     elif i < n and toks[i] == "worktree" and i + 1 < n and toks[i + 1] == "add":
         i += 2
         path = None
@@ -391,7 +440,7 @@ while i < n:
             i += 1
             break
         if path:
-            register_created(last_cd_dir, path)
+            register_created(cdir, path)
 print("\n".join(out))
 PYEOF
 )
