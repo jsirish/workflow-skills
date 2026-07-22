@@ -210,7 +210,8 @@ ddev_root_for() { # dir
     */vendor/*) : ;;
     *) return 0 ;;
   esac
-  local root="${abs%%/vendor/*}"
+  local root="${abs%/vendor/*}"  # nearest enclosing vendor/, not the leftmost
+  { [ -f "$root/composer.json" ] || [ -f "$root/composer.lock" ]; } || return 0  # real composer boundary, not a coincidental vendor/ dir
   [ -f "$root/.ddev/config.yaml" ] && printf '%s\t%s\n' "$root" "$abs"
 }
 
@@ -278,6 +279,18 @@ php_checks() { # dir
     # scaffold a stray .ddev/config.yaml into this dir.
     local PRE; PRE="$(php_prefix .)"
     run() { if [ -n "$PRE" ]; then X $PRE "$@"; else X "$@"; fi; }
+
+    # Routed into an enclosing project's ddev container (see ddev_root_for)
+    # while this dir also ships its own .ddev/config.yaml: by design the
+    # enclosing project wins (real dependency/DB env beats a standalone
+    # container for a module developed in place), but that can silently run
+    # checks against a different PHP version than the module's own config
+    # targets. Surface it as a runtime signal rather than a silent choice.
+    case "$PRE" in
+      "ddev exec -d"*)
+        [ -f .ddev/config.yaml ] && record WARN "PHP[$d]: routed into the enclosing project's DDEV container, but this dir has its own .ddev/config.yaml (possible PHP-version mismatch — see SKILL.md)"
+        ;;
+    esac
 
     # --- composer: validate + install ------------------------------------
     local CC; CC="$(composer_cmd_for_prefix "$PRE")"
