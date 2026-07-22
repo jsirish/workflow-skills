@@ -220,29 +220,44 @@ ddev_root_for() { # dir
   esac
   local root="${abs%/vendor/*}"  # nearest enclosing vendor/, not the leftmost
   { [ -f "$root/composer.json" ] || [ -f "$root/composer.lock" ]; } || return 0  # real composer boundary, not a coincidental vendor/ dir
-  [ -f "$root/.ddev/config.yaml" ] && printf '%s\t%s\n' "$root" "$abs"
+  [ -f "$root/.ddev/config.yaml" ] || return 0
+  # ddev's own project name, not assumed from the dir basename (they can
+  # differ) - needed so php_prefix can pin the target project explicitly
+  # rather than let `ddev exec` guess it from the invoking shell's cwd.
+  local name; name="$(sed -n 's/^name:[[:space:]]*//p' "$root/.ddev/config.yaml" | head -1 | tr -d '"'"'"'\r')"
+  [ -n "$name" ] && printf '%s\t%s\t%s\n' "$root" "$abs" "$name"
 }
 
 # Echoes the command prefix for PHP tools given a project dir.
 #   - dir is a nested vendor/ live checkout under a DIFFERENT project's ddev
-#     root (see ddev_root_for above) -> "ddev exec -d <relpath-from-root>"
-#     (`ddev exec` always runs at the container's fixed working directory
-#     otherwise, so a per-directory `cd` before this point never reaches the
-#     container; -d fixes that without leaving DDEV). Checked BEFORE the
-#     dir's own .ddev/config.yaml: a standalone-testable module that ships
-#     its own DDEV config for its own separate project is still, when
-#     nested under vendor/ here, meant to be checked against the ENCLOSING
-#     project's real dependency/DB environment, not spin up its own
-#     unrelated container - the whole point of routing it into vendor/ in
-#     the first place (see the SKILL.md note for the PHP-version-mismatch
-#     tradeoff this implies).
+#     root (see ddev_root_for above) -> "ddev exec -p <root-project-name> -d
+#     /var/www/html/<relpath-from-root>". Both -p and the absolute container
+#     path are required, not just convenience: `ddev exec` resolves WHICH
+#     project to target by walking up from the INVOKING SHELL's cwd to the
+#     nearest .ddev/config.yaml - it does not derive that from -d's value at
+#     all. Every caller of this prefix runs from within `dir` itself (a `cd
+#     "$d"` already happened), so if `dir` has its own .ddev/config.yaml
+#     (exactly the case the PHP-version-mismatch WARN below anticipates),
+#     an unpinned `ddev exec -d <relpath>` would silently target THAT
+#     project's own separate container instead of the enclosing one -
+#     verified directly against a real nested ddev fixture, not assumed:
+#     without -p it started the module's own container; with -p it
+#     correctly targeted the enclosing project's, even invoked from inside
+#     the nested dir. Once -p pins the project, -d must be an absolute path
+#     inside the CONTAINER, not host-relative - DDEV's fixed approot mount
+#     (independent of any docroot setting), since a relative -d value is
+#     resolved against the container's own cwd, not wherever the host
+#     shell happens to be.
 #   - dir IS a ddev project root         -> "ddev exec"
 #   - neither                            -> "" (bare metal / no ddev)
 php_prefix() { # dir
   local hit; hit="$(ddev_root_for "$1")"
   if [ -n "$hit" ]; then
-    local root="${hit%%$'\t'*}" abs="${hit#*$'\t'}"
-    echo "ddev exec -d ${abs#"$root"/}"
+    local root abs name
+    root="${hit%%$'\t'*}"
+    abs="${hit#*$'\t'}"; abs="${abs%%$'\t'*}"
+    name="${hit##*$'\t'}"
+    echo "ddev exec -p $name -d /var/www/html/${abs#"$root"/}"
     return
   fi
   if [ -f "$1/.ddev/config.yaml" ] || { [ "$1" = "." ] && [ -f ".ddev/config.yaml" ]; }; then
@@ -253,14 +268,15 @@ php_prefix() { # dir
 }
 
 # Under DDEV, use "ddev composer" at the project root — it handles container
-# mounts / mutagen sync correctly. For a nested subdir (a "ddev exec -d
-# <relpath>" prefix rather than the bare "ddev exec"), compose against that
-# same scoped exec instead — "ddev composer" always targets the project
-# root's own composer.json, not a --dir-scoped location. Takes the already-
-# computed prefix rather than re-deriving it, so callers that need both the
+# mounts / mutagen sync correctly. For a nested subdir (a "ddev exec -p
+# <name> -d <path>" prefix rather than the bare "ddev exec"), compose
+# against that same scoped, pinned exec instead — "ddev composer" always
+# targets the CWD-detected project's own composer.json, not a --dir-scoped
+# location within an explicitly pinned one. Takes the already-computed
+# prefix rather than re-deriving it, so callers that need both the
 # prefix and the composer command only resolve ddev_root_for once per dir.
 # Known limitation, not fixed: the nested-subdir "$pp composer" (plain
-# `ddev exec -d <relpath> composer`) doesn't have the same explicit
+# `ddev exec -p <name> -d <path> composer`) doesn't have the same explicit
 # mutagen-sync-flush behaviour the "ddev composer" wrapper does - there is
 # no such wrapper for a directory-scoped call, since "ddev composer" itself
 # can't be scoped to a subdirectory. On a Mutagen-backed DDEV project this
@@ -301,22 +317,25 @@ php_checks() { # dir
     # with the composer step (both use the same pre-install snapshot)
     # rather than each tool independently re-deriving it, which is the
     # tradeoff this "once" design deliberately accepts.
-    # Known limitation, not fixed: $PRE ("ddev exec -d <relpath>") is spliced
-    # unquoted into run() and every composer/phpcs/phpunit/phpstan bash -c
-    # string below, so a space anywhere in <relpath> would word-split into
-    # extra tokens and break the invocation. Accepted rather than reworked
-    # into an array threaded through every call site: composer vendor/
-    # package paths are vendor/<vendor-slug>/<package-slug>, and neither
-    # slug is ever space-containing in practice.
+    # Known limitation, not fixed: $PRE ("ddev exec -p <name> -d <path>") is
+    # spliced unquoted into run() and every composer/phpcs/phpunit/phpstan
+    # bash -c string below, so unquoted-expansion hazards apply to the ddev
+    # project name and <relpath> alike - not just a space word-splitting
+    # into extra tokens, but any shell glob character (*, ?, [) undergoing
+    # pathname expansion against whatever happens to be in the working
+    # directory. Accepted rather than reworked into an array threaded
+    # through every call site: ddev itself rejects project names containing
+    # spaces or glob characters, and composer vendor/<vendor-slug>/<package-slug> paths are
+    # never space-containing in practice.
     local PRE; PRE="$(php_prefix .)"
     run() { if [ -n "$PRE" ]; then X $PRE "$@"; else X "$@"; fi; }
     # Single source of truth for "did this dir get routed into a different
     # (enclosing) project's DDEV container" - computed once here rather
     # than each WARN site below independently pattern-matching the literal
-    # "ddev exec -d" prefix against PRE/CC, which could silently drift out
+    # "ddev exec -p " prefix against PRE/CC, which could silently drift out
     # of sync with php_prefix's actual output format.
     local NESTED=0
-    case "$PRE" in "ddev exec -d"*) NESTED=1 ;; esac
+    case "$PRE" in "ddev exec -p "*) NESTED=1 ;; esac
 
     # Routed into an enclosing project's ddev container (see ddev_root_for)
     # while this dir also ships its own .ddev/config.yaml: by design the
@@ -357,8 +376,8 @@ php_checks() { # dir
       fi
 
       if [ "$FRESH_DEPS" -eq 1 ] || [ ! -d vendor ]; then
-        # A dir routed through "ddev exec -d <relpath>" (nested under a
-        # different DDEV project root - see php_prefix above) with no
+        # A dir routed through "ddev exec -p <name> -d <path>" (nested under
+        # a different DDEV project root - see php_prefix above) with no
         # vendor/ yet is about to run its own first composer install. This
         # now happens inside the real DDEV container instead of bare metal,
         # but it still runs the module's own composer.json - if it declares
