@@ -21,7 +21,10 @@
 # Command parsing uses a shell tokenizer (python3 shlex), not a regex, so
 # quoted `-C` paths, paths with spaces, per-invocation `-C`/`-c` options,
 # compound commands with several pushes, and string literals that merely
-# mention "git push" are all handled correctly.
+# mention "git push" are all handled correctly. A preceding `cd <dir> &&`
+# (or `cd <dir>;`) is also tracked and used as the base directory for a
+# later bare `git push` (no explicit `-C`) - each `cd` updates the effective
+# directory for everything after it, matching real shell semantics.
 #
 # Fail-open by design (documented, keep the list short): jq or python3
 # missing, or the command contains no real git push invocation.
@@ -68,6 +71,7 @@ except ValueError:
 ENV_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
 out = []
 i, n = 0, len(toks)
+last_cd_dir = None  # most recent `cd <dir>` statement seen so far, left to right
 while i < n:
     bypass = False
     while i < n and ENV_RE.match(toks[i]):
@@ -77,6 +81,14 @@ while i < n:
     if i >= n:
         break
     start = i
+    if toks[i] == "cd" and i + 1 < n and not toks[i + 1].startswith("-"):
+        # Track `cd <dir>` as a statement, so a later bare `git push` (no -C)
+        # resolves against it instead of the tool call's original cwd. Real
+        # shell semantics: each `cd` changes the directory for everything
+        # after it, until the next `cd`.
+        last_cd_dir = toks[i + 1]
+        i += 2
+        continue
     if toks[i] == "rtk":
         i += 1
         if i < n and toks[i] == "proxy":
@@ -88,7 +100,7 @@ while i < n:
         i = start + 1
         continue
     i += 1  # past "git"
-    cdir = "."
+    cdir = last_cd_dir if last_cd_dir is not None else "."
     while i < n:
         tk = toks[i]
         if tk == "-C" and i + 1 < n:
