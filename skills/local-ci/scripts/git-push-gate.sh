@@ -26,18 +26,22 @@
 # later bare `git push` (no explicit `-C`) - each `cd` updates the effective
 # directory for everything after it, matching real shell semantics; an
 # explicit `-C <relative>` on the git invocation itself also composes onto
-# a preceding `cd`, not just the tool call's original cwd. `cd`/`git`/`rtk`
-# are matched wherever the token appears (not restricted to command
+# a preceding `cd`, and chained `-C` flags on the same invocation compose
+# onto each other in order (`git -C a -C b` -> cwd/a/b), matching how git
+# itself resolves them - not just the tool call's original cwd. `cd`/`git`/
+# `rtk` are matched wherever the token appears (not restricted to command
 # position), so a wrapper before the real command (`time git push`,
 # `env FOO=bar git push`, a newline- or `;`-separated `git push` with no
 # `&&`/`||` before it) is still recognised - the accepted cost is a bare
 # `cd`/`git` appearing as a plain argument to an unrelated command (e.g.
 # `echo cd bar`) being misread as a real statement, a rare edge case.
 # Every resolved `cd` target is checked against the real filesystem before
-# being trusted: an unresolved `$VAR`, a typo, or a `cd` that would
-# actually fail at runtime all fail this check - a real failed `cd` leaves
-# the shell's directory unchanged, so tracking keeps whatever directory was
-# already known rather than discarding it or trusting the bad value.
+# being trusted. Whenever a `cd`'s effect can't be confidently resolved -
+# an unresolved `$VAR`, a typo, an empty argument, `cd -`, a bare `cd`, a
+# conditional `cd ... ||`, or "cd" matched as a plain argument with nothing
+# directory-shaped following it - tracking is left untouched rather than
+# reset: a previously-tracked, recently relevant directory is a safer
+# fallback than discarding it for the tool call's unrelated raw cwd.
 #
 # Fail-open by design (documented, keep the list short): jq or python3
 # missing, or the command contains no real git push invocation.
@@ -163,30 +167,35 @@ while i < n:
         while j < n and toks[j] in ("-L", "-P", "-e", "-@"):
             j += 1
         arg = None
+        resolvable = True  # False for cases with no directory to even attempt
         if j < n and toks[j] == "--":
             j += 1
-            if j < n and toks[j]:
-                arg = toks[j]; j += 1
+            if j < n:
+                arg = toks[j]; j += 1  # may be "" - resolve_cd's isdir check is the arbiter
+            else:
+                resolvable = False
         elif j < n and toks[j] == "-":
-            j += 1  # `cd -`: swaps to $OLDPWD, not statically known
-        elif j < n and toks[j] and toks[j][0] != "-" and is_word_char(toks[j][0]):
-            arg = toks[j]
             j += 1
+            resolvable = False  # `cd -`: swaps to $OLDPWD, not statically known
+        elif j < n and toks[j] and not toks[j].startswith("-"):
+            arg = toks[j]  # may be "" - resolve_cd's isdir check is the arbiter
+            j += 1
+        else:
+            resolvable = False  # bare `cd`, or a false match with no valid arg following
         # A `cd <dir> || <fallback>` only takes effect if the cd FAILS,
         # which we can't know statically - too risky to trust either way.
         followed_by_or = j < n and toks[j] == "||"
-        if arg is not None and not followed_by_or:
+        if resolvable and arg is not None and not followed_by_or:
             resolved = resolve_cd(last_cd_dir, arg)
             if resolved != "UNCHANGED":
                 last_cd_dir = resolved
-            # else: a real failed `cd` leaves the directory as it was -
-            # last_cd_dir is intentionally left untouched, not reset.
-        else:
-            # `cd -`, a bare `cd` (goes to $HOME), or a conditional
-            # `cd ... ||`: can't resolve the resulting directory with
-            # confidence. Fall back to "untracked" (gates the tool call's
-            # own .cwd) rather than risk trusting a stale or wrong one.
-            last_cd_dir = None
+        # In every other case (`cd -`, a bare `cd`, a conditional `cd ...
+        # ||`, an empty/failed cd, or "cd" matched as a plain argument to
+        # some other command with nothing directory-shaped following it,
+        # e.g. `git commit -m cd`) last_cd_dir is deliberately left
+        # UNTOUCHED rather than reset - a previously-tracked, recently
+        # relevant directory is a safer fallback than discarding it for
+        # the tool call's unrelated raw cwd.
         i = j
         continue
 
@@ -201,16 +210,20 @@ while i < n:
         i = start + 1
         continue
     i += 1  # past "git"
-    cdir = last_cd_dir if last_cd_dir is not None else "."
+    cdir = last_cd_dir  # None means "untracked"; resolved to "." only at output time
     while i < n:
         tk2 = toks[i]
         if not tk2:
             i += 1
             continue
         if tk2 == "-C" and i + 1 < n:
-            cdir = compose(last_cd_dir, toks[i + 1]); i += 2
+            # Composes onto the RUNNING cdir (this invocation's own prior
+            # -C, if any), not always onto last_cd_dir - git itself chains
+            # successive -C flags relative to each other, so
+            # `git -C a -C b` resolves to <cwd>/a/b, not <cwd>/b.
+            cdir = compose(cdir, toks[i + 1]); i += 2
         elif tk2.startswith("-C") and len(tk2) > 2:
-            cdir = compose(last_cd_dir, tk2[2:]); i += 1
+            cdir = compose(cdir, tk2[2:]); i += 1
         elif tk2 == "-c" and i + 1 < n:
             i += 2
         elif tk2.startswith("-c") and len(tk2) > 2:
@@ -220,7 +233,7 @@ while i < n:
         else:
             break
     if i < n and toks[i] == "push":
-        out.append("BYPASS" if bypass else cdir)
+        out.append("BYPASS" if bypass else (cdir if cdir is not None else "."))
         i += 1
 print("\n".join(out))
 PYEOF
