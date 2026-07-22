@@ -276,7 +276,14 @@ php_checks() { # dir
     # the PHP tool runner below) - ddev_root_for does real filesystem work,
     # and if it were called twice with a composer install running in
     # between, the two calls could disagree if that install happened to
-    # scaffold a stray .ddev/config.yaml into this dir.
+    # scaffold a stray .ddev/config.yaml into this dir. The flip side of
+    # that same choice: this snapshot is taken BEFORE composer install
+    # runs, so if install itself is what scaffolds a stray
+    # .ddev/config.yaml here, dev/build/phpunit/phpcs/phpstan below still
+    # use the pre-install routing for the rest of this run - consistent
+    # with the composer step (both use the same pre-install snapshot)
+    # rather than each tool independently re-deriving it, which is the
+    # tradeoff this "once" design deliberately accepts.
     # Known limitation, not fixed: $PRE ("ddev exec -d <relpath>") is spliced
     # unquoted into run() and every composer/phpcs/phpunit/phpstan bash -c
     # string below, so a space anywhere in <relpath> would word-split into
@@ -286,6 +293,13 @@ php_checks() { # dir
     # slug is ever space-containing in practice.
     local PRE; PRE="$(php_prefix .)"
     run() { if [ -n "$PRE" ]; then X $PRE "$@"; else X "$@"; fi; }
+    # Single source of truth for "did this dir get routed into a different
+    # (enclosing) project's DDEV container" - computed once here rather
+    # than each WARN site below independently pattern-matching the literal
+    # "ddev exec -d" prefix against PRE/CC, which could silently drift out
+    # of sync with php_prefix's actual output format.
+    local NESTED=0
+    case "$PRE" in "ddev exec -d"*) NESTED=1 ;; esac
 
     # Routed into an enclosing project's ddev container (see ddev_root_for)
     # while this dir also ships its own .ddev/config.yaml: by design the
@@ -293,11 +307,9 @@ php_checks() { # dir
     # container for a module developed in place), but that can silently run
     # checks against a different PHP version than the module's own config
     # targets. Surface it as a runtime signal rather than a silent choice.
-    case "$PRE" in
-      "ddev exec -d"*)
-        [ -f .ddev/config.yaml ] && record WARN "PHP[$d]: routed into the enclosing project's DDEV container, but this dir has its own .ddev/config.yaml (possible PHP-version mismatch — see SKILL.md)"
-        ;;
-    esac
+    if [ "$NESTED" -eq 1 ] && [ -f .ddev/config.yaml ]; then
+      record WARN "PHP[$d]: routed into the enclosing project's DDEV container, but this dir has its own .ddev/config.yaml (possible PHP-version mismatch — see SKILL.md)"
+    fi
 
     # --- composer: validate + install ------------------------------------
     local CC; CC="$(composer_cmd_for_prefix "$PRE")"
@@ -338,12 +350,8 @@ php_checks() { # dir
         # script can still scaffold files into this dir regardless of ddev
         # vs bare metal. Flag it; local-ci can't prevent a module's own
         # composer.json from doing this.
-        if [ "$DRY" -eq 0 ]; then
-          case "$CC" in
-            "ddev exec -d"*)
-              [ -d vendor ] || record WARN "PHP[$d]: first composer install in a nested DDEV subdir - if this module's require-dev includes a project-scaffolding package (e.g. recipe-testing), its post-install script may still scaffold stray files here regardless of DDEV routing"
-              ;;
-          esac
+        if [ "$DRY" -eq 0 ] && [ "$NESTED" -eq 1 ] && [ ! -d vendor ]; then
+          record WARN "PHP[$d]: first composer install in a nested DDEV subdir - if this module's require-dev includes a project-scaffolding package (e.g. recipe-testing), its post-install script may still scaffold stray files here regardless of DDEV routing"
         fi
         hdr "PHP[$d]: composer install"
         if [ "$DRY" -eq 1 ]; then
