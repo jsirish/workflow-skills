@@ -43,16 +43,38 @@
 # statement, a rare edge case. `~` and `$VAR` in a `cd` or `-C`/
 # `--work-tree` argument are expanded before resolution. Every resolved
 # `cd` target is checked against the real filesystem before being trusted,
-# EXCEPT when a `mkdir`, `git clone`, or `git worktree add` appeared
-# earlier in the same compound command - that not-yet-existing directory
-# is then trusted, since it will exist by the time the `cd` actually runs
-# (`mkdir foo && cd foo && git push`). Whenever a `cd`'s effect still
-# can't be confidently resolved - an unresolved `$VAR`, a typo, an empty
-# argument, `cd -`, a bare `cd`, a conditional `cd ... ||`, or "cd"
-# matched as a plain argument with nothing directory-shaped following it -
-# tracking is left untouched rather than reset: a previously-tracked,
-# recently relevant directory is a safer fallback than discarding it for
-# the tool call's unrelated raw cwd.
+# EXCEPT when its exact target (or a path under it) was the destination of
+# a `mkdir`, `git clone`, or `git worktree add` seen earlier in the same
+# compound command - that specific not-yet-existing directory is then
+# trusted, since it will exist by the time the `cd` actually runs
+# (`mkdir foo && cd foo && git push`); an unrelated or typoed `cd`
+# elsewhere in the same command is not covered by this and still needs to
+# already exist. A `cd` on either side of `||` is left untrusted (neither
+# "does the LHS fail" nor "did the prior statement fail, making the RHS
+# run at all" is known statically). Whenever a `cd`'s effect still can't
+# be confidently resolved - an unresolved `$VAR` (only the hook process's
+# own environment is consulted; a bare `NAME=value` statement assigned
+# earlier in the same not-yet-executed command is invisible to this static
+# analysis), a typo, an empty argument, `cd -`, a bare `cd`, a conditional
+# `cd ... ||` on either side, or "cd" matched as a plain argument with
+# nothing directory-shaped following it - tracking is left untouched
+# rather than reset: a previously-tracked, recently relevant directory is
+# a safer fallback than discarding it for the tool call's unrelated raw
+# cwd (this also means a `cd` that fails at runtime and a `cd` that
+# statically can't be resolved are both treated as "no-op", matching real
+# shell behaviour for the former and erring safe for the latter).
+#
+# Known limitation, not fixed: a `cd` argument built from command
+# substitution (`cd $(git rev-parse --show-toplevel)/sub`) is not
+# resolved - shlex's punctuation-aware tokenizer splits `$(`...`)` into
+# separate `$`, `(`, ..., `)` tokens. The lone `$` is consumed as (and
+# fails to resolve as) the cd's own argument, and the stray `(`/`)` are
+# then misread by the subshell-boundary scan above as a real `( ... )`
+# subshell, which can pop a stale `last_cd_dir` back onto the stack. A
+# quoted `)` inside an otherwise plain string (`echo ")" && git push`) can
+# desync the same scan the same way. Both are rare enough in a push
+# command's own `cd` target to document rather than give `(`/`)` their
+# own quote- and substitution-aware tokenizer-level carve-out.
 #
 # Fail-open by design (documented, keep the list short): jq or python3
 # missing, or the command contains no real git push invocation.
@@ -123,18 +145,23 @@ def compose(base, val):
     result = (b.rstrip("/") + "/" + val) if b not in ("", ".") else val
     return os.path.normpath(result)
 
-def resolve_cd(base, arg, trust_missing=False):
+def resolve_cd(base, arg, created_dirs):
     candidate = compose(base, arg)
     # Reality check: an unresolved $VAR (left as a literal "$VAR" segment),
     # a typo, or a cd that would actually fail at runtime all converge on
     # "this path doesn't verifiably exist right now". A real failed `cd`
     # leaves the shell's directory unchanged, so on failure keep whatever
     # was already tracked (the sentinel below) rather than either trusting
-    # the bad value or discarding a previously-good one. Exception: a
-    # `mkdir`/`git clone`/`git worktree add` seen earlier in this same
-    # compound command (trust_missing) means the dir plausibly doesn't
-    # exist YET but will by the time this cd actually runs.
-    if not os.path.isdir(candidate) and not trust_missing:
+    # the bad value or discarding a previously-good one. Exception: this
+    # exact candidate (or a path under it) was the target of a `mkdir`,
+    # `git clone`, or `git worktree add` seen earlier in the same compound
+    # command - trust_missing by exact/prefix match, not a blanket "some
+    # creator command appeared somewhere earlier" flag, so an unrelated or
+    # typoed `cd` elsewhere in the same command still isn't trusted.
+    if os.path.isdir(candidate):
+        return candidate
+    trusted = any(candidate == d or candidate.startswith(d + os.sep) for d in created_dirs)
+    if not trusted:
         return "UNCHANGED"
     return candidate
 
@@ -142,7 +169,8 @@ out = []
 i, n = 0, len(toks)
 last_cd_dir = None  # most recent `cd <dir>` statement seen so far, left to right
 cd_stack = []  # last_cd_dir snapshots, pushed/popped across ( ... ) boundaries
-saw_creator = False  # mkdir / git clone / git worktree add seen earlier
+created_dirs = set()  # composed targets of mkdir / git clone / git worktree add seen earlier
+prev_was_or = False  # True while processing the token immediately after `||`
 while i < n:
     bypass = False
     while i < n and ENV_RE.match(toks[i]):
@@ -157,12 +185,16 @@ while i < n:
         i += 1
         continue
 
+    was_or, prev_was_or = prev_was_or, False
+
     # A token made entirely of shell punctuation may bundle a `(`/`)` with
     # an adjacent separator (shlex emits ");" as one token for
     # `... ); git push`, not two). Scan its characters for subshell
     # boundaries: `(` saves the current tracked dir, `)` restores it - a
     # `cd` inside `( ... )` never affects the outer shell's directory.
     if not is_word_char(tk[0]):
+        if tk == "||":
+            prev_was_or = True
         for ch in tk:
             if ch == "(":
                 cd_stack.append(last_cd_dir)
@@ -172,8 +204,15 @@ while i < n:
         continue
 
     if tk == "mkdir":
-        saw_creator = True
         i += 1
+        base = last_cd_dir
+        while i < n and toks[i] and (is_word_char(toks[i][0]) or toks[i].startswith("-")):
+            t = toks[i]
+            if t.startswith("-"):
+                i += 1  # flags (-p and unrecognized alike) - best-effort skip
+                continue
+            created_dirs.add(compose(base, t))
+            i += 1
         continue
 
     # "cd"/"git"/"rtk" are matched as token VALUES wherever they appear,
@@ -208,20 +247,22 @@ while i < n:
             j += 1
         else:
             resolvable = False  # bare `cd`, or a false match with no valid arg following
-        # A `cd <dir> || <fallback>` only takes effect if the cd FAILS,
-        # which we can't know statically - too risky to trust either way.
+        # A `cd <dir> || <fallback>` only takes effect if the cd FAILS, and a
+        # `cd` that is itself the right-hand side of a preceding `||` only
+        # takes effect if THAT PRIOR statement failed - neither is knowable
+        # statically, so both sides of `||` are left untrusted.
         followed_by_or = j < n and toks[j] == "||"
-        if resolvable and arg is not None and not followed_by_or:
-            resolved = resolve_cd(last_cd_dir, arg, trust_missing=saw_creator)
+        if resolvable and arg is not None and not followed_by_or and not was_or:
+            resolved = resolve_cd(last_cd_dir, arg, created_dirs)
             if resolved != "UNCHANGED":
                 last_cd_dir = resolved
         # In every other case (`cd -`, a bare `cd`, a conditional `cd ...
-        # ||`, an empty/failed cd, or "cd" matched as a plain argument to
-        # some other command with nothing directory-shaped following it,
-        # e.g. `git commit -m cd`) last_cd_dir is deliberately left
-        # UNTOUCHED rather than reset - a previously-tracked, recently
-        # relevant directory is a safer fallback than discarding it for
-        # the tool call's unrelated raw cwd.
+        # ||` on either side, an empty/failed cd, or "cd" matched as a
+        # plain argument to some other command with nothing directory-
+        # shaped following it, e.g. `git commit -m cd`) last_cd_dir is
+        # deliberately left UNTOUCHED rather than reset - a previously-
+        # tracked, recently relevant directory is a safer fallback than
+        # discarding it for the tool call's unrelated raw cwd.
         i = j
         continue
 
@@ -272,11 +313,44 @@ while i < n:
         out.append("BYPASS" if bypass else (cdir if cdir is not None else "."))
         i += 1
     elif i < n and toks[i] == "clone":
-        saw_creator = True
+        # Registers the clone's actual destination dir (explicit arg, or
+        # inferred from the URL's basename when omitted) rather than a
+        # blanket "a clone happened somewhere" flag.
         i += 1
+        url = None
+        dest = None
+        while i < n and toks[i] and (is_word_char(toks[i][0]) or toks[i].startswith("-")):
+            t = toks[i]
+            if t.startswith("-"):
+                i += 1  # clone options - best-effort skip, values not tracked
+                continue
+            if url is None:
+                url = t
+            elif dest is None:
+                dest = t
+                i += 1
+                break
+            i += 1
+        if url is not None and dest is None:
+            base_name = url.rstrip("/").split("/")[-1]
+            if base_name.endswith(".git"):
+                base_name = base_name[:-4]
+            dest = base_name or None
+        if dest:
+            created_dirs.add(compose(last_cd_dir, dest))
     elif i < n and toks[i] == "worktree" and i + 1 < n and toks[i + 1] == "add":
-        saw_creator = True
         i += 2
+        path = None
+        while i < n and toks[i]:
+            t = toks[i]
+            if t.startswith("-"):
+                i += 1  # worktree add options - best-effort skip, values not tracked
+                continue
+            path = t
+            i += 1
+            break
+        if path:
+            created_dirs.add(compose(last_cd_dir, path))
 print("\n".join(out))
 PYEOF
 )
