@@ -188,19 +188,61 @@ if [ "${#DIRS[@]}" -eq 0 ]; then
 fi
 
 # ----- PHP runner (ddev-aware) ------------------------------------------
+# Walk up from $1's ancestors (not $1 itself) looking for .ddev/config.yaml.
+# Prints the ddev project root (absolute) if found, nothing otherwise. Used
+# to detect a nested live-git-checkout under vendor/ (e.g. a SilverStripe
+# module developed in place inside a DDEV project's vendor/ tree) so its
+# checks can still route through the project's real DDEV container instead
+# of falling back to a bare-metal PHP toolchain.
+ddev_root_for() { # dir
+  local d
+  d="$(cd "$1" 2>/dev/null && pwd)" || return 0
+  [ -z "$d" ] && return 0
+  d="$(dirname "$d")"
+  while [ "$d" != "/" ] && [ -n "$d" ]; do
+    if [ -f "$d/.ddev/config.yaml" ]; then
+      echo "$d"
+      return 0
+    fi
+    d="$(dirname "$d")"
+  done
+}
+
 # Echoes the command prefix for PHP tools given a project dir.
+#   - dir IS a ddev project root         -> "ddev exec"
+#   - dir is nested under a ddev root    -> "ddev exec -d <relpath-from-root>"
+#     (e.g. a vendor/<pkg> live checkout under a DDEV project's own root —
+#     `ddev exec` always runs at the container's fixed working directory
+#     otherwise, so a per-directory `cd` before this point never reaches the
+#     container; -d fixes that without leaving DDEV)
+#   - neither                            -> "" (bare metal / no ddev)
 php_prefix() { # dir
   if [ -f "$1/.ddev/config.yaml" ] || { [ "$1" = "." ] && [ -f ".ddev/config.yaml" ]; }; then
     echo "ddev exec"
+    return
+  fi
+  local root; root="$(ddev_root_for "$1")"
+  if [ -n "$root" ]; then
+    local abs rel
+    abs="$(cd "$1" 2>/dev/null && pwd)" || return
+    rel="${abs#"$root"/}"
+    echo "ddev exec -d $rel"
   else
     echo ""
   fi
 }
 
-# Under DDEV, use "ddev composer" — it handles container mounts / mutagen sync correctly.
+# Under DDEV, use "ddev composer" at the project root — it handles container
+# mounts / mutagen sync correctly. For a nested subdir (php_prefix returns
+# "ddev exec -d <relpath>" rather than the bare "ddev exec"), compose against
+# that same scoped exec instead — "ddev composer" always targets the
+# project root's own composer.json, not a --dir-scoped location.
 composer_cmd() { # dir
-  if [ -n "$(php_prefix "$1")" ]; then
+  local pp; pp="$(php_prefix "$1")"
+  if [ "$pp" = "ddev exec" ]; then
     echo "ddev composer"
+  elif [ -n "$pp" ]; then
+    echo "$pp composer"
   elif command -v composer >/dev/null 2>&1; then
     echo "composer"
   else
@@ -245,6 +287,21 @@ php_checks() { # dir
       fi
 
       if [ "$FRESH_DEPS" -eq 1 ] || [ ! -d vendor ]; then
+        # A dir routed through "ddev exec -d <relpath>" (nested under a
+        # different DDEV project root - see php_prefix above) with no
+        # vendor/ yet is about to run its own first composer install. This
+        # now happens inside the real DDEV container instead of bare metal,
+        # but it still runs the module's own composer.json - if it declares
+        # require-dev packages that assume they're the project root (e.g. a
+        # SilverStripe test-scaffold recipe with a post-install script), that
+        # script can still scaffold files into this dir regardless of ddev
+        # vs bare metal. Flag it; local-ci can't prevent a module's own
+        # composer.json from doing this.
+        case "$CC" in
+          "ddev exec -d"*)
+            [ -d vendor ] || record WARN "PHP[$d]: first composer install in a nested DDEV subdir - if this module's require-dev includes a project-scaffolding package (e.g. recipe-testing), its post-install script may still scaffold stray files here regardless of DDEV routing"
+            ;;
+        esac
         hdr "PHP[$d]: composer install"
         if [ "$DRY" -eq 1 ]; then
           printf '   \033[90m[dry-run] %s\033[0m\n' "$CC install --no-interaction --prefer-dist"
