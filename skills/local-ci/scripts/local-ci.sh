@@ -202,6 +202,14 @@ fi
 # unrelated ancestor project's .ddev/config.yaml above the real project
 # boundary (there's only ever one candidate root to check: the dir
 # immediately enclosing vendor/).
+# Known limitation, not fixed: only one level of vendor/ nesting is
+# checked. A live checkout nested inside ANOTHER live checkout's own
+# vendor/ (module-in-module, itself with no .ddev/config.yaml) resolves
+# root to the inner module - not a real composer/ddev boundary - and
+# silently falls back to bare metal with no WARN. Rare enough (a module
+# developed in place inside another module developed in place) to accept
+# rather than generalize into the ancestor walk this function's own
+# single-boundary design deliberately avoids (see above).
 ddev_root_for() { # dir
   local abs; abs="$(cd "$1" 2>/dev/null && pwd)" || return 0
   [ -z "$abs" ] && return 0
@@ -251,6 +259,15 @@ php_prefix() { # dir
 # root's own composer.json, not a --dir-scoped location. Takes the already-
 # computed prefix rather than re-deriving it, so callers that need both the
 # prefix and the composer command only resolve ddev_root_for once per dir.
+# Known limitation, not fixed: the nested-subdir "$pp composer" (plain
+# `ddev exec -d <relpath> composer`) doesn't have the same explicit
+# mutagen-sync-flush behaviour the "ddev composer" wrapper does - there is
+# no such wrapper for a directory-scoped call, since "ddev composer" itself
+# can't be scoped to a subdirectory. On a Mutagen-backed DDEV project this
+# could in principle let a host-side vendor/bin/* check run before the
+# container's install output is fully synced. Accepted as an inherent
+# property of using ddev exec for directory-scoped work, not something
+# local-ci can route around.
 composer_cmd_for_prefix() { # prefix
   local pp="$1"
   if [ "$pp" = "ddev exec" ]; then
@@ -308,7 +325,7 @@ php_checks() { # dir
     # checks against a different PHP version than the module's own config
     # targets. Surface it as a runtime signal rather than a silent choice.
     if [ "$NESTED" -eq 1 ] && [ -f .ddev/config.yaml ]; then
-      record WARN "PHP[$d]: routed into the enclosing project's DDEV container, but this dir has its own .ddev/config.yaml (possible PHP-version mismatch — see SKILL.md)"
+      record WARN "PHP[$d]: routed into the enclosing project's DDEV container, but this dir has its own .ddev/config.yaml (possible PHP-version mismatch - see SKILL.md)"
     fi
 
     # --- composer: validate + install ------------------------------------
