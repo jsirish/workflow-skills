@@ -277,6 +277,13 @@ php_checks() { # dir
     # and if it were called twice with a composer install running in
     # between, the two calls could disagree if that install happened to
     # scaffold a stray .ddev/config.yaml into this dir.
+    # Known limitation, not fixed: $PRE ("ddev exec -d <relpath>") is spliced
+    # unquoted into run() and every composer/phpcs/phpunit/phpstan bash -c
+    # string below, so a space anywhere in <relpath> would word-split into
+    # extra tokens and break the invocation. Accepted rather than reworked
+    # into an array threaded through every call site: composer vendor/
+    # package paths are vendor/<vendor-slug>/<package-slug>, and neither
+    # slug is ever space-containing in practice.
     local PRE; PRE="$(php_prefix .)"
     run() { if [ -n "$PRE" ]; then X $PRE "$@"; else X "$@"; fi; }
 
