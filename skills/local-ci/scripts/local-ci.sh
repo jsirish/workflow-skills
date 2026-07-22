@@ -191,14 +191,17 @@ fi
 # If $1 is a live git checkout nested under a vendor/ path whose enclosing
 # project has its own .ddev/config.yaml (e.g. a SilverStripe module
 # developed in place inside vendor/dynamic/<pkg>, rather than a plain
-# composer-installed package), prints that project's root (absolute).
-# Deliberately narrow - a targeted "find the vendor/ boundary" computation,
-# not a generic ancestor walk - so it: (a) never affects the default
-# frontend/client/backend/app scan dirs (they aren't under vendor/, so this
-# returns nothing for them and they keep their pre-existing bare-metal
-# behavior unchanged), and (b) can't cross into an unrelated ancestor
-# project's .ddev/config.yaml above the real project boundary (there's only
-# ever one candidate root to check: the dir immediately enclosing vendor/).
+# composer-installed package), prints "<root>\t<abs>" (the enclosing
+# project's root and $1's own absolute path - both already resolved here so
+# php_prefix doesn't need a second cd+pwd to get the same $1 resolved
+# again). Deliberately narrow - a targeted "find the vendor/ boundary"
+# computation, not a generic ancestor walk - so it: (a) never affects the
+# default frontend/client/backend/app scan dirs (they aren't under
+# vendor/, so this returns nothing for them and they keep their
+# pre-existing bare-metal behavior unchanged), and (b) can't cross into an
+# unrelated ancestor project's .ddev/config.yaml above the real project
+# boundary (there's only ever one candidate root to check: the dir
+# immediately enclosing vendor/).
 ddev_root_for() { # dir
   local abs; abs="$(cd "$1" 2>/dev/null && pwd)" || return 0
   [ -z "$abs" ] && return 0
@@ -208,7 +211,7 @@ ddev_root_for() { # dir
     *) return 0 ;;
   esac
   local root="${abs%%/vendor/*}"
-  [ -f "$root/.ddev/config.yaml" ] && echo "$root"
+  [ -f "$root/.ddev/config.yaml" ] && printf '%s\t%s\n' "$root" "$abs"
 }
 
 # Echoes the command prefix for PHP tools given a project dir.
@@ -222,16 +225,15 @@ ddev_root_for() { # dir
 #     nested under vendor/ here, meant to be checked against the ENCLOSING
 #     project's real dependency/DB environment, not spin up its own
 #     unrelated container - the whole point of routing it into vendor/ in
-#     the first place.
+#     the first place (see the SKILL.md note for the PHP-version-mismatch
+#     tradeoff this implies).
 #   - dir IS a ddev project root         -> "ddev exec"
 #   - neither                            -> "" (bare metal / no ddev)
 php_prefix() { # dir
-  local root; root="$(ddev_root_for "$1")"
-  if [ -n "$root" ]; then
-    local abs rel
-    abs="$(cd "$1" 2>/dev/null && pwd)" || return
-    rel="${abs#"$root"/}"
-    echo "ddev exec -d $rel"
+  local hit; hit="$(ddev_root_for "$1")"
+  if [ -n "$hit" ]; then
+    local root="${hit%%$'\t'*}" abs="${hit#*$'\t'}"
+    echo "ddev exec -d ${abs#"$root"/}"
     return
   fi
   if [ -f "$1/.ddev/config.yaml" ] || { [ "$1" = "." ] && [ -f ".ddev/config.yaml" ]; }; then
@@ -316,11 +318,13 @@ php_checks() { # dir
         # script can still scaffold files into this dir regardless of ddev
         # vs bare metal. Flag it; local-ci can't prevent a module's own
         # composer.json from doing this.
-        case "$CC" in
-          "ddev exec -d"*)
-            [ -d vendor ] || record WARN "PHP[$d]: first composer install in a nested DDEV subdir - if this module's require-dev includes a project-scaffolding package (e.g. recipe-testing), its post-install script may still scaffold stray files here regardless of DDEV routing"
-            ;;
-        esac
+        if [ "$DRY" -eq 0 ]; then
+          case "$CC" in
+            "ddev exec -d"*)
+              [ -d vendor ] || record WARN "PHP[$d]: first composer install in a nested DDEV subdir - if this module's require-dev includes a project-scaffolding package (e.g. recipe-testing), its post-install script may still scaffold stray files here regardless of DDEV routing"
+              ;;
+          esac
+        fi
         hdr "PHP[$d]: composer install"
         if [ "$DRY" -eq 1 ]; then
           printf '   \033[90m[dry-run] %s\033[0m\n' "$CC install --no-interaction --prefer-dist"
