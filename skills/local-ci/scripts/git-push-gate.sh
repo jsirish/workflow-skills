@@ -25,23 +25,34 @@
 # (or `cd <dir>;`) is also tracked and used as the base directory for a
 # later bare `git push` (no explicit `-C`) - each `cd` updates the effective
 # directory for everything after it, matching real shell semantics; an
-# explicit `-C <relative>` on the git invocation itself also composes onto
-# a preceding `cd`, and chained `-C` flags on the same invocation compose
-# onto each other in order (`git -C a -C b` -> cwd/a/b), matching how git
-# itself resolves them - not just the tool call's original cwd. `cd`/`git`/
-# `rtk` are matched wherever the token appears (not restricted to command
-# position), so a wrapper before the real command (`time git push`,
-# `env FOO=bar git push`, a newline- or `;`-separated `git push` with no
-# `&&`/`||` before it) is still recognised - the accepted cost is a bare
-# `cd`/`git` appearing as a plain argument to an unrelated command (e.g.
-# `echo cd bar`) being misread as a real statement, a rare edge case.
-# Every resolved `cd` target is checked against the real filesystem before
-# being trusted. Whenever a `cd`'s effect can't be confidently resolved -
-# an unresolved `$VAR`, a typo, an empty argument, `cd -`, a bare `cd`, a
-# conditional `cd ... ||`, or "cd" matched as a plain argument with nothing
-# directory-shaped following it - tracking is left untouched rather than
-# reset: a previously-tracked, recently relevant directory is a safer
-# fallback than discarding it for the tool call's unrelated raw cwd.
+# explicit `-C <relative>`/`--work-tree <relative>` on the git invocation
+# itself also composes onto a preceding `cd`, and chained `-C` flags on the
+# same invocation compose onto each other in order (`git -C a -C b` ->
+# cwd/a/b), matching how git itself resolves them - not just the tool
+# call's original cwd. `--work-tree` is treated the same as `-C` (both
+# repoint git's working directory); other long options that take a
+# separate value token (`--git-dir`, `--namespace`, `--super-prefix`,
+# `--config-env`, `--exec-path`) are recognised and their value skipped
+# so they don't desync the flag scan, but they don't affect the resolved
+# directory. `cd`/`git`/`rtk` are matched wherever the token appears (not
+# restricted to command position), so a wrapper before the real command
+# (`time git push`, `env FOO=bar git push`, a newline- or `;`-separated
+# `git push` with no `&&`/`||` before it) is still recognised - the
+# accepted cost is a bare `cd`/`git` appearing as a plain argument to an
+# unrelated command (e.g. `echo cd bar`) being misread as a real
+# statement, a rare edge case. `~` and `$VAR` in a `cd` or `-C`/
+# `--work-tree` argument are expanded before resolution. Every resolved
+# `cd` target is checked against the real filesystem before being trusted,
+# EXCEPT when a `mkdir`, `git clone`, or `git worktree add` appeared
+# earlier in the same compound command - that not-yet-existing directory
+# is then trusted, since it will exist by the time the `cd` actually runs
+# (`mkdir foo && cd foo && git push`). Whenever a `cd`'s effect still
+# can't be confidently resolved - an unresolved `$VAR`, a typo, an empty
+# argument, `cd -`, a bare `cd`, a conditional `cd ... ||`, or "cd"
+# matched as a plain argument with nothing directory-shaped following it -
+# tracking is left untouched rather than reset: a previously-tracked,
+# recently relevant directory is a safer fallback than discarding it for
+# the tool call's unrelated raw cwd.
 #
 # Fail-open by design (documented, keep the list short): jq or python3
 # missing, or the command contains no real git push invocation.
@@ -88,6 +99,11 @@ except ValueError:
 
 ENV_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
 
+# Long git options that take their value as a SEPARATE following token and
+# don't affect the resolved directory (unlike -C/--work-tree below) - just
+# consumed so the flag-scan loop doesn't mistake the value for a subcommand.
+GIT_LONG_OPTS_WITH_VALUE = {"--git-dir", "--namespace", "--super-prefix", "--config-env", "--exec-path"}
+
 def is_word_char(ch):
     return ch.isalnum() or ch in "_./~$"
 
@@ -95,26 +111,30 @@ def compose(base, val):
     # Compose a (possibly relative) directory value onto the currently
     # tracked dir, the same way a real shell resolves any relative path
     # against whatever the cwd actually is at that point - used for both
-    # `cd <relative>` and an explicit `git -C <relative>` that follows one.
+    # `cd <relative>` and an explicit `git -C <relative>`/`--work-tree
+    # <relative>` that follows one. ~ and $VAR expansion (shlex does
+    # neither) applies here so it's shared by every caller, not just cd.
+    if val.startswith("~"):
+        val = os.path.expanduser(val)
+    val = os.path.expandvars(val)
     if val.startswith("/"):
         return os.path.normpath(val)
     b = base if base is not None else cwd
     result = (b.rstrip("/") + "/" + val) if b not in ("", ".") else val
     return os.path.normpath(result)
 
-def resolve_cd(base, arg):
-    # ~ and $VAR expansion (shlex does neither).
-    if arg.startswith("~"):
-        arg = os.path.expanduser(arg)
-    arg = os.path.expandvars(arg)
+def resolve_cd(base, arg, trust_missing=False):
     candidate = compose(base, arg)
     # Reality check: an unresolved $VAR (left as a literal "$VAR" segment),
     # a typo, or a cd that would actually fail at runtime all converge on
     # "this path doesn't verifiably exist right now". A real failed `cd`
     # leaves the shell's directory unchanged, so on failure keep whatever
     # was already tracked (the sentinel below) rather than either trusting
-    # the bad value or discarding a previously-good one.
-    if not os.path.isdir(candidate):
+    # the bad value or discarding a previously-good one. Exception: a
+    # `mkdir`/`git clone`/`git worktree add` seen earlier in this same
+    # compound command (trust_missing) means the dir plausibly doesn't
+    # exist YET but will by the time this cd actually runs.
+    if not os.path.isdir(candidate) and not trust_missing:
         return "UNCHANGED"
     return candidate
 
@@ -122,6 +142,7 @@ out = []
 i, n = 0, len(toks)
 last_cd_dir = None  # most recent `cd <dir>` statement seen so far, left to right
 cd_stack = []  # last_cd_dir snapshots, pushed/popped across ( ... ) boundaries
+saw_creator = False  # mkdir / git clone / git worktree add seen earlier
 while i < n:
     bypass = False
     while i < n and ENV_RE.match(toks[i]):
@@ -147,6 +168,11 @@ while i < n:
                 cd_stack.append(last_cd_dir)
             elif ch == ")" and cd_stack:
                 last_cd_dir = cd_stack.pop()
+        i += 1
+        continue
+
+    if tk == "mkdir":
+        saw_creator = True
         i += 1
         continue
 
@@ -186,7 +212,7 @@ while i < n:
         # which we can't know statically - too risky to trust either way.
         followed_by_or = j < n and toks[j] == "||"
         if resolvable and arg is not None and not followed_by_or:
-            resolved = resolve_cd(last_cd_dir, arg)
+            resolved = resolve_cd(last_cd_dir, arg, trust_missing=saw_creator)
             if resolved != "UNCHANGED":
                 last_cd_dir = resolved
         # In every other case (`cd -`, a bare `cd`, a conditional `cd ...
@@ -224,6 +250,16 @@ while i < n:
             cdir = compose(cdir, toks[i + 1]); i += 2
         elif tk2.startswith("-C") and len(tk2) > 2:
             cdir = compose(cdir, tk2[2:]); i += 1
+        elif tk2 == "--work-tree" and i + 1 < n:
+            # --work-tree is semantically equivalent to -C for our purposes
+            # (it repoints git at a different working directory).
+            cdir = compose(cdir, toks[i + 1]); i += 2
+        elif tk2.startswith("--work-tree="):
+            cdir = compose(cdir, tk2[len("--work-tree="):]); i += 1
+        elif tk2 in GIT_LONG_OPTS_WITH_VALUE and i + 1 < n:
+            i += 2  # consume value; doesn't affect the resolved dir
+        elif any(tk2.startswith(o + "=") for o in GIT_LONG_OPTS_WITH_VALUE):
+            i += 1
         elif tk2 == "-c" and i + 1 < n:
             i += 2
         elif tk2.startswith("-c") and len(tk2) > 2:
@@ -235,6 +271,12 @@ while i < n:
     if i < n and toks[i] == "push":
         out.append("BYPASS" if bypass else (cdir if cdir is not None else "."))
         i += 1
+    elif i < n and toks[i] == "clone":
+        saw_creator = True
+        i += 1
+    elif i < n and toks[i] == "worktree" and i + 1 < n and toks[i + 1] == "add":
+        saw_creator = True
+        i += 2
 print("\n".join(out))
 PYEOF
 )
