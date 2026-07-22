@@ -233,10 +233,14 @@ def register_created(base, val):
     # up into shared ancestors like `/tmp` itself and trust everything under it.
     target = compose(base, val)
     anchor = os.path.normpath(base if base is not None else cwd)
+    # anchor + os.sep would be "//" when anchor is filesystem root, which no
+    # real absolute path is a prefix of - special-cased so the walk still
+    # works when operating at "/" instead of silently registering nothing.
+    anchor_prefix = anchor if anchor == "/" else anchor + os.sep
     created_dirs.add(target)
     p = os.path.dirname(target)
     guard = 0
-    while p not in ("", "/") and p != anchor and p.startswith(anchor + os.sep) and guard < 64:
+    while p not in ("", "/") and p != anchor and p.startswith(anchor_prefix) and guard < 64:
         created_dirs.add(p)
         parent = os.path.dirname(p)
         if parent == p:
@@ -309,6 +313,8 @@ while i < n:
                 if t in ("-p", "--parents") or (not t.startswith("--") and "p" in t[1:]):
                     saw_p = True
                 i += 1  # flags (-p and unrecognized alike) - best-effort skip
+                if t in ("-m", "--mode") and i < n:
+                    i += 1  # also consume this option's separate value token
                 continue
             if saw_p:
                 register_created(base, t)
@@ -354,7 +360,12 @@ while i < n:
         elif j < n and toks[j] == "-":
             j += 1
             resolvable = False  # `cd -`: swaps to $OLDPWD, not statically known
-        elif j < n and toks[j] and not toks[j].startswith("-"):
+        elif j < n and toks[j] and not toks[j].startswith("-") and is_word_char(toks[j][0]):
+            # is_word_char guards against a bare `cd` (no path) immediately
+            # followed by an operator token like `||`/`&&`/`;` - those
+            # don't start with "-" either, and without this check would be
+            # misread as the cd's own directory argument instead of being
+            # left for the normal operator/prev_was_or handling below.
             arg = toks[j]  # may be "" - resolve_cd's isdir check is the arbiter
             j += 1
         else:
@@ -378,7 +389,13 @@ while i < n:
         # shaped following it, e.g. `git commit -m cd`) last_cd_dir is
         # deliberately left UNTOUCHED rather than reset - a previously-
         # tracked, recently relevant directory is a safer fallback than
-        # discarding it for the tool call's unrelated raw cwd.
+        # discarding it for the tool call's unrelated raw cwd. Known
+        # limitation, not fixed: `cd -` specifically doesn't actually match
+        # this "would otherwise fail, so no-op" reasoning - a real `cd -`
+        # usually SUCCEEDS (swaps to $OLDPWD), it just targets a directory
+        # this script doesn't track (would need a full cd HISTORY, not just
+        # the single most-recent one). Leaving last_cd_dir untouched is a
+        # bounded, deliberate approximation, not a claim that `cd -` no-ops.
         i = j
         continue
 
@@ -463,7 +480,7 @@ while i < n:
     elif i < n and toks[i] == "worktree" and i + 1 < n and toks[i + 1] == "add":
         i += 2
         path = None
-        while i < n and toks[i] and not is_statement_word(toks[i]):
+        while i < n and toks[i] and (is_word_char(toks[i][0]) or toks[i].startswith("-")) and not is_statement_word(toks[i]):
             t = toks[i]
             if t.startswith("-"):
                 i += 1
