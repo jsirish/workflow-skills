@@ -212,24 +212,30 @@ ddev_root_for() { # dir
 }
 
 # Echoes the command prefix for PHP tools given a project dir.
-#   - dir IS a ddev project root         -> "ddev exec"
-#   - dir is a nested vendor/ live checkout under a ddev root (see
-#     ddev_root_for above) -> "ddev exec -d <relpath-from-root>"
+#   - dir is a nested vendor/ live checkout under a DIFFERENT project's ddev
+#     root (see ddev_root_for above) -> "ddev exec -d <relpath-from-root>"
 #     (`ddev exec` always runs at the container's fixed working directory
 #     otherwise, so a per-directory `cd` before this point never reaches the
-#     container; -d fixes that without leaving DDEV)
+#     container; -d fixes that without leaving DDEV). Checked BEFORE the
+#     dir's own .ddev/config.yaml: a standalone-testable module that ships
+#     its own DDEV config for its own separate project is still, when
+#     nested under vendor/ here, meant to be checked against the ENCLOSING
+#     project's real dependency/DB environment, not spin up its own
+#     unrelated container - the whole point of routing it into vendor/ in
+#     the first place.
+#   - dir IS a ddev project root         -> "ddev exec"
 #   - neither                            -> "" (bare metal / no ddev)
 php_prefix() { # dir
-  if [ -f "$1/.ddev/config.yaml" ] || { [ "$1" = "." ] && [ -f ".ddev/config.yaml" ]; }; then
-    echo "ddev exec"
-    return
-  fi
   local root; root="$(ddev_root_for "$1")"
   if [ -n "$root" ]; then
     local abs rel
     abs="$(cd "$1" 2>/dev/null && pwd)" || return
     rel="${abs#"$root"/}"
     echo "ddev exec -d $rel"
+    return
+  fi
+  if [ -f "$1/.ddev/config.yaml" ] || { [ "$1" = "." ] && [ -f ".ddev/config.yaml" ]; }; then
+    echo "ddev exec"
   else
     echo ""
   fi
