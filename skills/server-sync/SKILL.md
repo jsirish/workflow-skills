@@ -16,7 +16,12 @@ Pulls the remote content state (database and assets) down to a local DDEV enviro
 
 ## Prerequisites / Safety
 
-Run `ddev auth ssh` before syncing — `sync.sh` needs authenticated SSH to reach the remote server.
+> [!IMPORTANT]
+> **DDEV containers don't inherit host SSH keys.** Run `ddev auth ssh` once per DDEV instance before either of these:
+> - **`sync.sh`** — needs authenticated SSH to reach the remote server (see below).
+> - **`composer update`/`install` on any SSH-sourced VCS package** (`git@github.com:...`, e.g. a `dynamic/*` module pulled as a VCS repository rather than from Packagist) — `ddev composer` fails to clone/fetch it until `ddev auth ssh` has run.
+>
+> Symptom without it: `Permission denied (publickey)`, or a stalled SSH prompt with no interactive terminal to answer it.
 
 > [!IMPORTANT]
 > **`sync.sh` runs INSIDE the DDEV container** (`ddev exec ./sync.sh`). It connects `mysql` / `mysqldump` to the ddev `db` service host and imports into the container DB, so it must run where that hostname resolves. The script validates `ssh rsync mysqldump mysql gzip gunzip` — note **no `ddev`** in that list.
