@@ -24,6 +24,11 @@ Pushes local content state (database and assets) from a DDEV environment up to a
 bash deploy.sh
 ```
 
+> [!WARNING]
+> **`deploy.sh` will push your local `SS_DEFAULT_ADMIN_*` account to the remote target.** If `.env` has `SS_DEFAULT_ADMIN_USERNAME`/`PASSWORD` set (common for fresh `dev/build` convenience), local `dev/build` materializes those dev credentials as a real `Member` row with a bcrypt hash. The DB-push phase of `deploy.sh` dumps and imports the **entire** local `Member` table, so every deploy re-introduces (or refreshes) an admin login with dev credentials on the remote target — a real security hole if left in place.
+>
+> **Fix:** Once real CMS accounts exist for local login, comment out `SS_DEFAULT_ADMIN_*` in local `.env` — root-cause fix, rather than deleting the leaked `Member` row after every deploy.
+
 ## Environment Configuration (`.env`)
 
 `deploy.sh` reads `PREPROD_*` vars from the project `.env`:
