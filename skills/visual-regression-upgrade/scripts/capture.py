@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 
 def resolve_auth(cli_auth):
@@ -182,17 +183,29 @@ def wait_for_fonts(page, timeout_ms=10000):
     timing race this function exists to fix.
     """
     try:
-        # Pass an explicit Playwright-level timeout (JS race + 2s buffer) so that
-        # a crashed/unresponsive page context can't hang beyond the intended cap.
-        result = page.evaluate(
-            """async (timeoutMs) => {
-                const deadline = new Promise((resolve) =>
-                    setTimeout(() => resolve('timeout'), timeoutMs)
-                );
-                const raceResult = await Promise.race([document.fonts.ready, deadline]);
-                if (raceResult === 'timeout') {
-                    return 'timeout';
-                }
+        # wait_for_function awaits the promise an async expression returns
+        # (here, the real document.fonts.ready promise) rather than only
+        # polling a synchronous condition, so this keeps the exact guarantee
+        # fonts.ready provides — resolved only after a layout reflecting the
+        # loaded fonts has actually happened, not just once the underlying
+        # resources finish fetching (document.fonts.status flips to 'loaded'
+        # a moment earlier than that, which would reopen the FOUT race this
+        # function exists to close). Playwright's own `timeout` kwarg bounds
+        # the wait — page.evaluate() takes no such kwarg (removed/never
+        # supported in current Playwright; see workflow-skills#40), so the
+        # wait can't be bounded from inside an evaluate() call anymore.
+        try:
+            page.wait_for_function(
+                "async () => { await document.fonts.ready; return true; }",
+                timeout=timeout_ms,
+            )
+        except PlaywrightTimeoutError:
+            print(f"  [font-wait] timed out after {timeout_ms}ms — fonts.ready did not resolve", file=sys.stderr, flush=True)
+            return []
+        # Fonts have already settled by this point, so this evaluate() is a
+        # fast synchronous readout — no timeout kwarg needed here either.
+        return page.evaluate(
+            """() => {
                 const errors = [];
                 document.fonts.forEach((f) => {
                     if (f.status === 'error') {
@@ -205,14 +218,8 @@ def wait_for_fonts(page, timeout_ms=10000):
                     }
                 });
                 return errors;
-            }""",
-            timeout_ms,
-            timeout=timeout_ms + 2000,
+            }"""
         )
-        if result == 'timeout':
-            print(f"  [font-wait] timed out after {timeout_ms}ms — fonts.ready did not resolve", file=sys.stderr, flush=True)
-            return []
-        return result
     except Exception as e:
         print(f"  [font-wait] evaluation error (fonts.ready unavailable): {e}", file=sys.stderr, flush=True)
         return []
