@@ -336,6 +336,28 @@ php_checks() { # dir
     # of sync with php_prefix's actual output format.
     local NESTED=0
     case "$PRE" in "ddev exec -p "*) NESTED=1 ;; esac
+    
+    # When NESTED=1, capture the enclosing project root to use its vendor/bin
+    local ENCLOSING_ROOT=""
+    local ENCLOSING_VENDOR_BIN=""
+    if [ "$NESTED" -eq 1 ]; then
+      local hit; hit="$(ddev_root_for .)"
+      if [ -n "$hit" ]; then
+        ENCLOSING_ROOT="${hit%%$'\t'*}"
+        ENCLOSING_VENDOR_BIN="$ENCLOSING_ROOT/vendor/bin"
+      fi
+    fi
+    
+    # Helper to select correct vendor/bin path
+    # When routed into an enclosing project's DDEV container (NESTED=1), use the
+    # enclosing project's vendor/bin/ rather than the nested checkout's own.
+    # The nested checkout may have its own vendor/ from a standalone composer install,
+    # but that's disconnected from the DDEV DB and will fail with connection errors.
+    # The enclosing project's vendor/bin uses the correct DB configuration.
+    local VENDOR_BIN="vendor/bin"
+    if [ "$NESTED" -eq 1 ] && [ -n "$ENCLOSING_VENDOR_BIN" ]; then
+      VENDOR_BIN="$ENCLOSING_VENDOR_BIN"
+    fi
 
     # Routed into an enclosing project's ddev container (see ddev_root_for)
     # while this dir also ships its own .ddev/config.yaml: by design the
@@ -412,12 +434,12 @@ php_checks() { # dir
     # --- dev/build (SilverStripe) ----------------------------------------
     # Runs before phpunit so the ORM is built. Failure is WARN by default
     # (phpunit can sometimes self-bootstrap); use --strict-build for a hard gate.
-    if [ "$DO_BUILD" -eq 1 ] && [ -x vendor/bin/sake ]; then
+    if [ "$DO_BUILD" -eq 1 ] && [ -x "$VENDOR_BIN/sake" ]; then
       hdr "PHP[$d]: sake dev/build"
       if [ "$DRY" -eq 1 ]; then
-        run vendor/bin/sake dev/build flush=1
+        run "$VENDOR_BIN/sake" dev/build flush=1
         record PLAN "PHP[$d]: dev/build"
-      elif run vendor/bin/sake dev/build flush=1; then
+      elif run "$VENDOR_BIN/sake" dev/build flush=1; then
         record PASS "PHP[$d]: dev/build"
       elif [ "$(effective_sev build)" = FAIL ]; then
         record FAIL "PHP[$d]: dev/build"
@@ -432,44 +454,44 @@ php_checks() { # dir
     # composer install is only planned (not run), so vendor/'s absence there
     # reflects the skipped install, not a real missing-binary problem.
     local unit_cfg; unit_cfg="$(first_existing phpunit.xml phpunit.xml.dist || true)"
-    if [ -n "$unit_cfg" ] && [ -x vendor/bin/phpunit ]; then
-      run_check "PHP[$d]: phpunit" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/phpunit --colors=always; else vendor/bin/phpunit --colors=always; fi'
+    if [ -n "$unit_cfg" ] && [ -x "$VENDOR_BIN/phpunit" ]; then
+      run_check "PHP[$d]: phpunit" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' "$VENDOR_BIN/phpunit" --colors=always; else "$VENDOR_BIN/phpunit" --colors=always; fi'
     elif [ -n "$unit_cfg" ] && [ -d vendor ]; then
-      record WARN "PHP[$d]: phpunit (adopted via config but vendor/bin/phpunit missing)"
+      record WARN "PHP[$d]: phpunit (adopted via config but $VENDOR_BIN/phpunit missing)"
     fi
 
     # PHPCS (+ phpcbf auto-fix first)
     local std; std="$(first_existing phpcs.xml phpcs.xml.dist .phpcs.xml .phpcs.xml.dist || true)"
-    if [ -n "$std" ] && [ -x vendor/bin/phpcs ]; then
+    if [ -n "$std" ] && [ -x "$VENDOR_BIN/phpcs" ]; then
       # resolve sniff paths from convention (string, not array — safe under
       # set -u on macOS bash 3.2; empty means rely on the ruleset's <file> entries)
       local paths=""
       if [ -d app/src ]; then paths="app/src"; [ -d app/tests ] && paths="$paths app/tests"
       elif [ -d src ]; then paths="src"; [ -d tests ] && paths="$paths tests"
       fi
-      if [ "$DO_FIX" -eq 1 ] && [ -x vendor/bin/phpcbf ]; then
+      if [ "$DO_FIX" -eq 1 ] && [ -x "$VENDOR_BIN/phpcbf" ]; then
         hdr "PHP[$d]: phpcbf (auto-fix)"
         # shellcheck disable=SC2086  # intentional word-split of $paths
-        run vendor/bin/phpcbf --standard="$std" $paths || true
+        run "$VENDOR_BIN/phpcbf" --standard="$std" $paths || true
       fi
       run_check "PHP[$d]: phpcs" lint bash -c '
         if [ -n "'"$PRE"'" ]; then R="'"$PRE"' "; else R=""; fi
-        $R vendor/bin/phpcs -s --report=summary --standard="'"$std"'" --extensions=php,inc --ignore=autoload.php --ignore=vendor/ '"$paths"''
+        $R "$VENDOR_BIN/phpcs" -s --report=summary --standard="'"$std"'" --extensions=php,inc --ignore=autoload.php --ignore=vendor/ '"$paths"''
     elif [ -n "$std" ] && [ -d vendor ]; then
-      record WARN "PHP[$d]: phpcs (adopted via $std but vendor/bin/phpcs missing)"
+      record WARN "PHP[$d]: phpcs (adopted via $std but $VENDOR_BIN/phpcs missing)"
     fi
 
     # PHPStan
     local stan_cfg; stan_cfg="$(first_existing phpstan.neon phpstan.neon.dist || true)"
-    if [ -n "$stan_cfg" ] && [ -x vendor/bin/phpstan ]; then
-      run_check "PHP[$d]: phpstan" lint bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/phpstan analyse --no-progress; else vendor/bin/phpstan analyse --no-progress; fi'
+    if [ -n "$stan_cfg" ] && [ -x "$VENDOR_BIN/phpstan" ]; then
+      run_check "PHP[$d]: phpstan" lint bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' "$VENDOR_BIN/phpstan" analyse --no-progress; else "$VENDOR_BIN/phpstan" analyse --no-progress; fi'
     elif [ -n "$stan_cfg" ] && [ -d vendor ]; then
-      record WARN "PHP[$d]: phpstan (adopted via config but vendor/bin/phpstan missing)"
+      record WARN "PHP[$d]: phpstan (adopted via config but $VENDOR_BIN/phpstan missing)"
     fi
 
     # Behat (opt-in)
-    if [ "$WITH_BEHAT" -eq 1 ] && [ -f behat.yml ] && [ -x vendor/bin/behat ]; then
-      run_check "PHP[$d]: behat" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' vendor/bin/behat --colors --strict; else vendor/bin/behat --colors --strict; fi'
+    if [ "$WITH_BEHAT" -eq 1 ] && [ -f behat.yml ] && [ -x "$VENDOR_BIN/behat" ]; then
+      run_check "PHP[$d]: behat" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' "$VENDOR_BIN/behat" --colors --strict; else "$VENDOR_BIN/behat" --colors --strict; fi'
     fi
   )
 }
