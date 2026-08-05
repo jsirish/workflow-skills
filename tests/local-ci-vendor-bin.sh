@@ -40,39 +40,120 @@ FILE="$LOCAL_CI"
 FAILURES=0
 fail() { printf 'FAIL: %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 pass() { printf 'PASS: %s\n' "$1"; }
+skip() { printf 'SKIP: %s\n' "$1"; }
 
 TMP_DIRS=()
 cleanup() { for d in "${TMP_DIRS[@]:-}"; do [ -n "$d" ] && rm -rf "$d"; done; }
 trap cleanup EXIT
 
-# ===== Part A: static guard against unexpanded $VENDOR_BIN in bash -c ====
+# ===== Part A: exact-substring guard against unexpanded/misrouted VENDOR_BIN
+#
+# Matches the literal, fully-expanded invocation text anywhere in the file,
+# not a line-count context window — a window is layout-fragile (a harmless
+# reflow of a neighboring line shifts its boundary) and can either miss the
+# site or swallow an unrelated line (e.g. the WARN text a few lines down
+# that legitimately contains the host-side "$VENDOR_BIN/" — that one is
+# correct and must never be flagged). For the four `bash -c` sites
+# (phpunit/phpcs/phpstan/behat) this also guards a variant of #66's own bug
+# class against the *new* variable: VENDOR_BIN_RUN referenced but left
+# unquoted inside the single-quoted bash -c body would still expand to
+# nothing in the nested subshell, exactly like the original bug — so the
+# positive assertion is the full, correctly outer-shell-expanded text, not
+# a bare "does VENDOR_BIN_RUN appear nearby" substring check (which a
+# reintroduced unquoted reference would silently pass).
 
-check_site() { # description  grep-pattern  context-lines
-  local desc="$1" pattern="$2" lines="$3" block
-  block="$(grep -A "$lines" -F "$pattern" "$FILE")"
-  if [ -z "$block" ]; then
-    fail "Part A ($desc): could not locate the call site (anchor text '$pattern' not found — did the source change?)"
-    return
+site_ok() { # description  ok-literal
+  if grep -qF "$2" "$FILE"; then
+    pass "Part A ($1): correctly-expanded invocation present"
+  else
+    fail "Part A ($1): expected exact invocation text not found — either #66's unexpanded-variable bug has recurred, or VENDOR_BIN_RUN is present but not properly outer-shell-quoted. Expected:
+$2"
   fi
-  case "$block" in
-    *'$VENDOR_BIN/'*)
-      fail "Part A ($desc): unexpanded literal \$VENDOR_BIN/ found — this is exactly the #66 regression (variable referenced inside a context where it can't expand). Matched:
-$block"
-      ;;
-  esac
-  case "$block" in
-    *'VENDOR_BIN_RUN'*) pass "Part A ($desc): uses the exec-side VENDOR_BIN_RUN, no unexpanded literal" ;;
-    *) fail "Part A ($desc): expected VENDOR_BIN_RUN (exec-side path) not found. Matched:
-$block" ;;
-  esac
 }
 
-check_site "sake"    'hdr "PHP[$d]: sake dev/build"'  6
-check_site "phpunit" 'run_check "PHP[$d]: phpunit"'   0
-check_site "phpcbf"  'hdr "PHP[$d]: phpcbf (auto-fix)"' 2
-check_site "phpcs"   'run_check "PHP[$d]: phpcs"'     3
-check_site "phpstan" 'run_check "PHP[$d]: phpstan"'   0
-check_site "behat"   'run_check "PHP[$d]: behat"'     0
+site_bad_absent() { # description  bad-literal  why
+  if grep -qF "$2" "$FILE"; then
+    fail "Part A ($1): $3. Found:
+$2"
+  fi
+}
+
+PHPUNIT_OK=$(cat <<'EOF'
+"'"$VENDOR_BIN_RUN"'/phpunit" --colors=always; else "'"$VENDOR_BIN_RUN"'/phpunit"
+EOF
+)
+PHPUNIT_BAD_HOST=$(cat <<'EOF'
+"$VENDOR_BIN/phpunit" --colors=always; else "$VENDOR_BIN/phpunit"
+EOF
+)
+PHPUNIT_BAD_UNQUOTED=$(cat <<'EOF'
+"$VENDOR_BIN_RUN/phpunit" --colors=always; else "$VENDOR_BIN_RUN/phpunit"
+EOF
+)
+site_ok "phpunit" "$PHPUNIT_OK"
+site_bad_absent "phpunit" "$PHPUNIT_BAD_HOST" "unexpanded host-side \$VENDOR_BIN literal in a bash -c body — the original #66 bug"
+site_bad_absent "phpunit" "$PHPUNIT_BAD_UNQUOTED" "VENDOR_BIN_RUN referenced but not outer-shell-expanded — same bug class as #66, against the new variable"
+
+PHPCS_OK=$(cat <<'EOF'
+$R "'"$VENDOR_BIN_RUN"'/phpcs" -s --report=summary
+EOF
+)
+PHPCS_BAD_HOST=$(cat <<'EOF'
+$R "$VENDOR_BIN/phpcs" -s --report=summary
+EOF
+)
+PHPCS_BAD_UNQUOTED=$(cat <<'EOF'
+$R "$VENDOR_BIN_RUN/phpcs" -s --report=summary
+EOF
+)
+site_ok "phpcs" "$PHPCS_OK"
+site_bad_absent "phpcs" "$PHPCS_BAD_HOST" "unexpanded host-side \$VENDOR_BIN literal in a bash -c body — the original #66 bug"
+site_bad_absent "phpcs" "$PHPCS_BAD_UNQUOTED" "VENDOR_BIN_RUN referenced but not outer-shell-expanded — same bug class as #66, against the new variable"
+
+PHPSTAN_OK=$(cat <<'EOF'
+"'"$VENDOR_BIN_RUN"'/phpstan" analyse --no-progress; else "'"$VENDOR_BIN_RUN"'/phpstan"
+EOF
+)
+PHPSTAN_BAD_HOST=$(cat <<'EOF'
+"$VENDOR_BIN/phpstan" analyse --no-progress; else "$VENDOR_BIN/phpstan"
+EOF
+)
+PHPSTAN_BAD_UNQUOTED=$(cat <<'EOF'
+"$VENDOR_BIN_RUN/phpstan" analyse --no-progress; else "$VENDOR_BIN_RUN/phpstan"
+EOF
+)
+site_ok "phpstan" "$PHPSTAN_OK"
+site_bad_absent "phpstan" "$PHPSTAN_BAD_HOST" "unexpanded host-side \$VENDOR_BIN literal in a bash -c body — the original #66 bug"
+site_bad_absent "phpstan" "$PHPSTAN_BAD_UNQUOTED" "VENDOR_BIN_RUN referenced but not outer-shell-expanded — same bug class as #66, against the new variable"
+
+BEHAT_OK=$(cat <<'EOF'
+"'"$VENDOR_BIN_RUN"'/behat" --colors --strict; else "'"$VENDOR_BIN_RUN"'/behat"
+EOF
+)
+BEHAT_BAD_HOST=$(cat <<'EOF'
+"$VENDOR_BIN/behat" --colors --strict; else "$VENDOR_BIN/behat"
+EOF
+)
+BEHAT_BAD_UNQUOTED=$(cat <<'EOF'
+"$VENDOR_BIN_RUN/behat" --colors --strict; else "$VENDOR_BIN_RUN/behat"
+EOF
+)
+site_ok "behat" "$BEHAT_OK"
+site_bad_absent "behat" "$BEHAT_BAD_HOST" "unexpanded host-side \$VENDOR_BIN literal in a bash -c body — the original #66 bug"
+site_bad_absent "behat" "$BEHAT_BAD_UNQUOTED" "VENDOR_BIN_RUN referenced but not outer-shell-expanded — same bug class as #66, against the new variable"
+
+# sake and phpcbf go through run() (always outer-shell double-quoted, never
+# nested in a bash -c single-quoted body), so there's no "unquoted" failure
+# mode for them — only "wrong variable" (host path instead of exec path).
+SAKE_OK='run "$VENDOR_BIN_RUN/sake" dev/build flush=1'
+SAKE_BAD='run "$VENDOR_BIN/sake" dev/build flush=1'
+site_ok "sake" "$SAKE_OK"
+site_bad_absent "sake" "$SAKE_BAD" "host-side \$VENDOR_BIN used for the actual invocation instead of VENDOR_BIN_RUN — breaks the nested-DDEV case (Bug 2)"
+
+PHPCBF_OK='run "$VENDOR_BIN_RUN/phpcbf" --standard="$std" $paths'
+PHPCBF_BAD='run "$VENDOR_BIN/phpcbf" --standard="$std" $paths'
+site_ok "phpcbf" "$PHPCBF_OK"
+site_bad_absent "phpcbf" "$PHPCBF_BAD" "host-side \$VENDOR_BIN used for the actual invocation instead of VENDOR_BIN_RUN — breaks the nested-DDEV case (Bug 2)"
 
 # ===== Part B: functional, non-nested (the case #66 reported) ============
 # A plain project (no DDEV, not under vendor/) with stubbed vendor/bin/phpunit
@@ -167,10 +248,14 @@ EOF
 #!/usr/bin/env bash
 exit 0
 EOF
-  chmod +x "$root/vendor/bin/phpunit"
+  cat > "$root/vendor/bin/phpcs" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$root/vendor/bin/phpunit" "$root/vendor/bin/phpcs"
 
   if ! command -v git >/dev/null 2>&1; then
-    fail "Part C (nested): git not found on PATH — cannot build the nested-checkout fixture, skipping"
+    skip "Part C (nested): git not found on PATH — cannot build the nested-checkout fixture"
     return
   fi
   (
@@ -187,6 +272,9 @@ EOF
 EOF
   cat > "$nested/phpunit.xml" <<'EOF'
 <phpunit></phpunit>
+EOF
+  cat > "$nested/.phpcs.xml" <<'EOF'
+<ruleset name="fixture"></ruleset>
 EOF
 
   stub_bin="$work/stubbin"
@@ -226,6 +314,20 @@ $(cat "$ddev_log")"
 $(cat "$ddev_log")"
   else
     pass "Part C (nested): no host-path leaked into the container exec"
+  fi
+
+  if grep -qF '/var/www/html/vendor/bin/phpcs' "$ddev_log"; then
+    pass "Part C (nested): phpcs also invoked with the container vendor/bin path"
+  else
+    fail "Part C (nested): ddev exec was never called with /var/www/html/vendor/bin/phpcs. Calls seen:
+$(cat "$ddev_log")"
+  fi
+
+  if grep -qF "$root/vendor/bin/phpcs" "$ddev_log"; then
+    fail "Part C (nested): ddev exec was called with the HOST phpcs path ($root/vendor/bin/phpcs) instead of the container path — this is Bug 2. Calls seen:
+$(cat "$ddev_log")"
+  else
+    pass "Part C (nested): no host-path leaked into the container phpcs exec"
   fi
 
   if grep -qF "No such file or directory" "$out_log"; then
