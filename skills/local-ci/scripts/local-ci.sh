@@ -354,9 +354,23 @@ php_checks() { # dir
     # The nested checkout may have its own vendor/ from a standalone composer install,
     # but that's disconnected from the DDEV DB and will fail with connection errors.
     # The enclosing project's vendor/bin uses the correct DB configuration.
+    #
+    # Two variables, not one, because "where the binary lives" and "where the
+    # command that invokes it executes" are different filesystems when nested:
+    #   - VENDOR_BIN (host-side): used by the [ -x ... ] existence guards and
+    #     WARN text below, which run on the host against the enclosing
+    #     project's real absolute path.
+    #   - VENDOR_BIN_RUN (exec-side): used by the actual tool invocations.
+    #     When NESTED, $PRE routes those into the enclosing project's
+    #     container via `ddev exec`, where the host path doesn't exist -
+    #     DDEV's fixed approot mount is /var/www/html (the same constant
+    #     php_prefix above builds its -d value from). Non-nested, both
+    #     variables are the same relative "vendor/bin".
     local VENDOR_BIN="vendor/bin"
+    local VENDOR_BIN_RUN="vendor/bin"
     if [ "$NESTED" -eq 1 ] && [ -n "$ENCLOSING_VENDOR_BIN" ]; then
       VENDOR_BIN="$ENCLOSING_VENDOR_BIN"
+      VENDOR_BIN_RUN="/var/www/html/vendor/bin"
     fi
 
     # Routed into an enclosing project's ddev container (see ddev_root_for)
@@ -437,9 +451,9 @@ php_checks() { # dir
     if [ "$DO_BUILD" -eq 1 ] && [ -x "$VENDOR_BIN/sake" ]; then
       hdr "PHP[$d]: sake dev/build"
       if [ "$DRY" -eq 1 ]; then
-        run "$VENDOR_BIN/sake" dev/build flush=1
+        run "$VENDOR_BIN_RUN/sake" dev/build flush=1
         record PLAN "PHP[$d]: dev/build"
-      elif run "$VENDOR_BIN/sake" dev/build flush=1; then
+      elif run "$VENDOR_BIN_RUN/sake" dev/build flush=1; then
         record PASS "PHP[$d]: dev/build"
       elif [ "$(effective_sev build)" = FAIL ]; then
         record FAIL "PHP[$d]: dev/build"
@@ -455,7 +469,7 @@ php_checks() { # dir
     # reflects the skipped install, not a real missing-binary problem.
     local unit_cfg; unit_cfg="$(first_existing phpunit.xml phpunit.xml.dist || true)"
     if [ -n "$unit_cfg" ] && [ -x "$VENDOR_BIN/phpunit" ]; then
-      run_check "PHP[$d]: phpunit" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' "$VENDOR_BIN/phpunit" --colors=always; else "$VENDOR_BIN/phpunit" --colors=always; fi'
+      run_check "PHP[$d]: phpunit" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' "'"$VENDOR_BIN_RUN"'/phpunit" --colors=always; else "'"$VENDOR_BIN_RUN"'/phpunit" --colors=always; fi'
     elif [ -n "$unit_cfg" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpunit (adopted via config but $VENDOR_BIN/phpunit missing)"
     fi
@@ -472,11 +486,11 @@ php_checks() { # dir
       if [ "$DO_FIX" -eq 1 ] && [ -x "$VENDOR_BIN/phpcbf" ]; then
         hdr "PHP[$d]: phpcbf (auto-fix)"
         # shellcheck disable=SC2086  # intentional word-split of $paths
-        run "$VENDOR_BIN/phpcbf" --standard="$std" $paths || true
+        run "$VENDOR_BIN_RUN/phpcbf" --standard="$std" $paths || true
       fi
       run_check "PHP[$d]: phpcs" lint bash -c '
         if [ -n "'"$PRE"'" ]; then R="'"$PRE"' "; else R=""; fi
-        $R "$VENDOR_BIN/phpcs" -s --report=summary --standard="'"$std"'" --extensions=php,inc --ignore=autoload.php --ignore=vendor/ '"$paths"''
+        $R "'"$VENDOR_BIN_RUN"'/phpcs" -s --report=summary --standard="'"$std"'" --extensions=php,inc --ignore=autoload.php --ignore=vendor/ '"$paths"''
     elif [ -n "$std" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpcs (adopted via $std but $VENDOR_BIN/phpcs missing)"
     fi
@@ -484,14 +498,14 @@ php_checks() { # dir
     # PHPStan
     local stan_cfg; stan_cfg="$(first_existing phpstan.neon phpstan.neon.dist || true)"
     if [ -n "$stan_cfg" ] && [ -x "$VENDOR_BIN/phpstan" ]; then
-      run_check "PHP[$d]: phpstan" lint bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' "$VENDOR_BIN/phpstan" analyse --no-progress; else "$VENDOR_BIN/phpstan" analyse --no-progress; fi'
+      run_check "PHP[$d]: phpstan" lint bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' "'"$VENDOR_BIN_RUN"'/phpstan" analyse --no-progress; else "'"$VENDOR_BIN_RUN"'/phpstan" analyse --no-progress; fi'
     elif [ -n "$stan_cfg" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpstan (adopted via config but $VENDOR_BIN/phpstan missing)"
     fi
 
     # Behat (opt-in)
     if [ "$WITH_BEHAT" -eq 1 ] && [ -f behat.yml ] && [ -x "$VENDOR_BIN/behat" ]; then
-      run_check "PHP[$d]: behat" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' "$VENDOR_BIN/behat" --colors --strict; else "$VENDOR_BIN/behat" --colors --strict; fi'
+      run_check "PHP[$d]: behat" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' "'"$VENDOR_BIN_RUN"'/behat" --colors --strict; else "'"$VENDOR_BIN_RUN"'/behat" --colors --strict; fi'
     fi
   )
 }
