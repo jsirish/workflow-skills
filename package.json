@@ -11,6 +11,9 @@
   ],
   "author": "Jason Irish <jsirish@users.noreply.github.com>",
   "license": "MIT",
+  "scripts": {
+    "test": "bash tests/local-ci-vendor-bin.sh"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/jsirish/workflow-skills.git"
