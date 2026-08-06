@@ -55,6 +55,14 @@ npx skills add jsirish/workflow-skills --skill '*' -a claude-code -a opencode -g
 npx skills update -g
 ```
 
+> **`update` only refreshes skills you already have installed** — its arguments are installed
+> skill *names*, not a repo. It has no way to discover skills newly added to this repo since
+> your last install. After this repo gains new skills, re-run `add` instead to pick them up:
+>
+> ```bash
+> npx skills add jsirish/workflow-skills --all -g
+> ```
+
 ### List installed
 
 ```bash
