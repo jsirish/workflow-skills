@@ -839,8 +839,18 @@ FAILED=0
 if [ ! -s "$RESULTS_FILE" ]; then
   echo "No recognised check configs found — nothing to run."
 else
-  while IFS=$'\t' read -r status label; do
-    case "$status" in
+  # Not "status": zsh treats that as a read-only special (its $? alias), and
+  # `read -r status ...` under zsh (whether invoked directly or via a caller
+  # that runs the script with `zsh script.sh` instead of respecting the bash
+  # shebang) fatally errored here. The SUMMARY header still printed, but the
+  # loop body never ran: no PASS/FAIL/WARN rows, no closing "Result:" line,
+  # and the script died with exit 1 (zsh's own reaction to the read-only
+  # assignment) instead of reaching the exit-code logic below — a crash for
+  # the wrong reason, not a false "all checks passed." The quieter damage:
+  # the status-marker write further down never runs either, and
+  # git-push-gate.sh treats a missing marker as "never run" and fails open.
+  while IFS=$'\t' read -r res label; do
+    case "$res" in
       PASS) printf '  \033[32m✔ PASS\033[0m  %s\n' "$label" ;;
       FAIL) printf '  \033[31m✘ FAIL\033[0m  %s\n' "$label" ; FAILED=1 ;;
       WARN) printf '  \033[33m! WARN\033[0m  %s\n' "$label" ;;
