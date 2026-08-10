@@ -594,22 +594,42 @@ py_checks() { # dir
 
     # Resolve a project-local venv first: a uv/venv-managed project's
     # pytest/ruff typically live only in .venv/bin — invisible to `command -v`
-    # and to a bare system $PY's import path. An already-activated venv
-    # (VIRTUAL_ENV) wins over one merely found on disk, since activation may
-    # point somewhere other than ./.venv (and matches what a developer running
-    # the same suite by hand would get).
-    local VENV_BIN=""
-    if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "${VIRTUAL_ENV:-}/bin/python3" ]; then
-      VENV_BIN="$VIRTUAL_ENV/bin"
-    elif [ -x ./.venv/bin/python3 ]; then
+    # and to a bare system $PY's import path. This dir's own on-disk venv
+    # (./.venv, then ./venv) wins over an activated $VIRTUAL_ENV: py_checks
+    # runs once per scanned DIR (a monorepo scan can cover several, each with
+    # its own venv), and $VIRTUAL_ENV is a single process-global value that
+    # would otherwise silently override every dir's own venv with whichever
+    # one the invoking shell happened to have active. $VIRTUAL_ENV is still
+    # used as a fallback for a dir with no on-disk venv of its own.
+    #
+    # VENV_BIN may end up an absolute path (from $VIRTUAL_ENV) or relative
+    # (the ./.venv / ./venv literals) and either could contain shell
+    # metacharacters (e.g. a space) if the enclosing project path has one.
+    # It gets embedded both directly as a command word ($PY -c ...) and
+    # inside bash -c "..." strings below, so it's kept in two forms: VENV_BIN
+    # itself for the plain [ -x ... ] existence checks (already safely
+    # double-quoted there), and VENV_BIN_Q — shell-quoted via `printf %q` —
+    # for every context where it gets re-embedded into a string that a shell
+    # (this one or a nested bash -c) will re-parse. %q's escaping survives
+    # both: a plain unquoted word (backslash-escapes are honored by this
+    # shell's own word-splitting) and re-embedding inside a double-quoted
+    # string later handed to a nested `bash -c` (the backslash escapes pass
+    # through literally and are then honored by that nested shell in turn).
+    local VENV_BIN="" VENV_BIN_Q=""
+    if [ -x ./.venv/bin/python3 ]; then
       VENV_BIN="./.venv/bin"
     elif [ -x ./venv/bin/python3 ]; then
       VENV_BIN="./venv/bin"
+    elif [ -n "${VIRTUAL_ENV:-}" ] && [ -x "${VIRTUAL_ENV:-}/bin/python3" ]; then
+      VENV_BIN="$VIRTUAL_ENV/bin"
     fi
+    [ -n "$VENV_BIN" ] && VENV_BIN_Q="$(printf '%q' "$VENV_BIN")"
 
-    # Resolve a Python interpreter for module-import fallbacks.
+    # Resolve a Python interpreter for module-import fallbacks. Uses the
+    # shell-quoted VENV_BIN_Q (see above) since $PY is later invoked as a
+    # bare, unquoted command word ($PY -c ...).
     local PY=""
-    if [ -n "$VENV_BIN" ]; then PY="$VENV_BIN/python3";
+    if [ -n "$VENV_BIN" ]; then PY="$VENV_BIN_Q/python3";
     elif command -v python3 >/dev/null 2>&1; then PY="python3";
     elif command -v python >/dev/null 2>&1; then PY="python"; fi
 
@@ -633,7 +653,7 @@ py_checks() { # dir
     # global install can silently disagree with the project's pinned version
     # on default rule selection for the same config file.
     local RUFF=""
-    if [ -n "$VENV_BIN" ] && [ -x "$VENV_BIN/ruff" ]; then RUFF="$VENV_BIN/ruff";
+    if [ -n "$VENV_BIN" ] && [ -x "$VENV_BIN/ruff" ]; then RUFF="$VENV_BIN_Q/ruff";
     elif command -v ruff >/dev/null 2>&1; then RUFF="ruff";
     elif [ -n "$PY" ] && $PY -c 'import ruff' >/dev/null 2>&1; then RUFF="$PY -m ruff"; fi
     if [ -n "$RUFF" ] && [ "$ruff_adopted" -eq 0 ]; then
@@ -655,7 +675,7 @@ py_checks() { # dir
     # that natively), so suites that import top-level modules by cwd would
     # otherwise false-FAIL with ModuleNotFoundError.
     local PYTEST=""
-    if [ -n "$VENV_BIN" ] && [ -x "$VENV_BIN/pytest" ]; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" $VENV_BIN/pytest";
+    if [ -n "$VENV_BIN" ] && [ -x "$VENV_BIN/pytest" ]; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" $VENV_BIN_Q/pytest";
     elif command -v pytest >/dev/null 2>&1; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" pytest";
     elif [ -n "$PY" ] && $PY -c 'import pytest' >/dev/null 2>&1; then PYTEST="$PY -m pytest"; fi
 
