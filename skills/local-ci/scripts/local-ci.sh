@@ -839,8 +839,13 @@ FAILED=0
 if [ ! -s "$RESULTS_FILE" ]; then
   echo "No recognised check configs found — nothing to run."
 else
-  while IFS=$'\t' read -r status label; do
-    case "$status" in
+  # Not "status": zsh treats that as a read-only special (its $? alias), and
+  # `read -r status ...` under zsh (whether invoked directly or via a caller
+  # that runs the script with `zsh script.sh` instead of respecting the bash
+  # shebang) fatally errors here — SUMMARY never prints and the run silently
+  # exits 0 regardless of real results.
+  while IFS=$'\t' read -r res label; do
+    case "$res" in
       PASS) printf '  \033[32m✔ PASS\033[0m  %s\n' "$label" ;;
       FAIL) printf '  \033[31m✘ FAIL\033[0m  %s\n' "$label" ; FAILED=1 ;;
       WARN) printf '  \033[33m! WARN\033[0m  %s\n' "$label" ;;
