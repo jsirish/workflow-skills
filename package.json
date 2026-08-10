@@ -12,7 +12,7 @@
   "author": "Jason Irish <jsirish@users.noreply.github.com>",
   "license": "MIT",
   "scripts": {
-    "test": "bash tests/local-ci-vendor-bin.sh"
+    "test": "for f in tests/*.sh; do bash \"$f\" || exit 1; done"
   },
   "repository": {
     "type": "git",

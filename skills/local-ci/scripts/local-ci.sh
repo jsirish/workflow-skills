@@ -592,9 +592,45 @@ py_checks() { # dir
     [ -d tests ] && has_py=1
     [ "$has_py" -eq 1 ] || { first_existing pyproject.toml requirements.txt >/dev/null || return 0; }
 
-    # Resolve a Python interpreter for module-import fallbacks.
+    # Resolve a project-local venv first: a uv/venv-managed project's
+    # pytest/ruff typically live only in .venv/bin — invisible to `command -v`
+    # and to a bare system $PY's import path. This dir's own on-disk venv
+    # (./.venv, then ./venv) wins over an activated $VIRTUAL_ENV: py_checks
+    # runs once per scanned DIR (a monorepo scan can cover several, each with
+    # its own venv), and $VIRTUAL_ENV is a single process-global value that
+    # would otherwise silently override every dir's own venv with whichever
+    # one the invoking shell happened to have active. $VIRTUAL_ENV is still
+    # used as a fallback for a dir with no on-disk venv of its own.
+    #
+    # VENV_BIN may end up an absolute path (from $VIRTUAL_ENV) or relative
+    # (the ./.venv / ./venv literals) and either could contain shell
+    # metacharacters (e.g. a space) if the enclosing project path has one.
+    # It gets embedded both directly as a command word ($PY -c ...) and
+    # inside bash -c "..." strings below, so it's kept in two forms: VENV_BIN
+    # itself for the plain [ -x ... ] existence checks (already safely
+    # double-quoted there), and VENV_BIN_Q — shell-quoted via `printf %q` —
+    # for every context where it gets re-embedded into a string that a shell
+    # (this one or a nested bash -c) will re-parse. %q's escaping survives
+    # both: a plain unquoted word (backslash-escapes are honored by this
+    # shell's own word-splitting) and re-embedding inside a double-quoted
+    # string later handed to a nested `bash -c` (the backslash escapes pass
+    # through literally and are then honored by that nested shell in turn).
+    local VENV_BIN="" VENV_BIN_Q=""
+    if [ -x ./.venv/bin/python3 ]; then
+      VENV_BIN="./.venv/bin"
+    elif [ -x ./venv/bin/python3 ]; then
+      VENV_BIN="./venv/bin"
+    elif [ -n "${VIRTUAL_ENV:-}" ] && [ -x "${VIRTUAL_ENV:-}/bin/python3" ]; then
+      VENV_BIN="$VIRTUAL_ENV/bin"
+    fi
+    [ -n "$VENV_BIN" ] && VENV_BIN_Q="$(printf '%q' "$VENV_BIN")"
+
+    # Resolve a Python interpreter for module-import fallbacks. Uses the
+    # shell-quoted VENV_BIN_Q (see above) since $PY is later invoked as a
+    # bare, unquoted command word ($PY -c ...).
     local PY=""
-    if command -v python3 >/dev/null 2>&1; then PY="python3";
+    if [ -n "$VENV_BIN" ]; then PY="$VENV_BIN_Q/python3";
+    elif command -v python3 >/dev/null 2>&1; then PY="python3";
     elif command -v python >/dev/null 2>&1; then PY="python"; fi
 
     # ruff — gated on adoption, like phpcs/phpstan, not mere availability.
@@ -613,8 +649,12 @@ py_checks() { # dir
       ruff_adopted=1
     fi
 
+    # Prefer the venv's own ruff over a global one: a stray older/newer
+    # global install can silently disagree with the project's pinned version
+    # on default rule selection for the same config file.
     local RUFF=""
-    if command -v ruff >/dev/null 2>&1; then RUFF="ruff";
+    if [ -n "$VENV_BIN" ] && [ -x "$VENV_BIN/ruff" ]; then RUFF="$VENV_BIN_Q/ruff";
+    elif command -v ruff >/dev/null 2>&1; then RUFF="ruff";
     elif [ -n "$PY" ] && $PY -c 'import ruff' >/dev/null 2>&1; then RUFF="$PY -m ruff"; fi
     if [ -n "$RUFF" ] && [ "$ruff_adopted" -eq 0 ]; then
       record SKIP "PY[$d]: ruff (no ruff config — project has not adopted ruff)"
@@ -628,23 +668,31 @@ py_checks() { # dir
       record WARN "PY[$d]: ruff (adopted via config but ruff is not installed)"
     fi
 
-    # pytest — keep preferring a `pytest` already on PATH (it's the one tied to
-    # an active venv/project env, with the right plugins/deps) over a separately
-    # resolved $PY, which may belong to a different environment entirely. Either
-    # way, force cwd onto PYTHONPATH: the bare console script does not add cwd to
-    # sys.path (only `python -m pytest` does that natively), so suites that import
-    # top-level modules by cwd would otherwise false-FAIL with ModuleNotFoundError.
+    # pytest — prefer the venv's own binary (see VENV_BIN above), then a
+    # `pytest` already on PATH, then a separately resolved $PY's `-m pytest`.
+    # Either console-script form still needs cwd forced onto PYTHONPATH: it
+    # does not add cwd to sys.path on its own (only `python -m pytest` does
+    # that natively), so suites that import top-level modules by cwd would
+    # otherwise false-FAIL with ModuleNotFoundError.
     local PYTEST=""
-    if command -v pytest >/dev/null 2>&1; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" pytest";
+    if [ -n "$VENV_BIN" ] && [ -x "$VENV_BIN/pytest" ]; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" $VENV_BIN_Q/pytest";
+    elif command -v pytest >/dev/null 2>&1; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" pytest";
     elif [ -n "$PY" ] && $PY -c 'import pytest' >/dev/null 2>&1; then PYTEST="$PY -m pytest"; fi
-    if [ -n "$PYTEST" ]; then
-      # Recursive test detection: test files may live in nested packages
-      # rather than at the top level or in a tests/ dir.
-      if [ -d tests ] || [ -n "$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist -o -name site-packages \) -prune -o \( -name 'test_*.py' -o -name '*_test.py' \) -type f -print 2>/dev/null | head -1)" ]; then
-        run_check "PY[$d]: pytest" gate bash -c "$PYTEST -q"
-      else
-        record SKIP "PY[$d]: pytest (no tests found)"
-      fi
+
+    # Recursive test detection: test files may live in nested packages
+    # rather than at the top level or in a tests/ dir. Computed independently
+    # of PYTEST resolution so "pytest missing" and "no tests" stay
+    # distinguishable outcomes instead of collapsing into one silent no-op.
+    local has_tests=0
+    [ -d tests ] && has_tests=1
+    [ -n "$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist -o -name site-packages \) -prune -o \( -name 'test_*.py' -o -name '*_test.py' \) -type f -print 2>/dev/null | head -1)" ] && has_tests=1
+
+    if [ -n "$PYTEST" ] && [ "$has_tests" -eq 1 ]; then
+      run_check "PY[$d]: pytest" gate bash -c "$PYTEST -q"
+    elif [ -n "$PYTEST" ]; then
+      record SKIP "PY[$d]: pytest (no tests found)"
+    elif [ "$has_tests" -eq 1 ]; then
+      record WARN "PY[$d]: pytest (tests present but pytest is not installed/importable)"
     fi
   )
 }
