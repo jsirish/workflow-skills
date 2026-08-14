@@ -17,7 +17,7 @@ npx skills add jsirish/workflow-skills
 | `onboard` | Bootstrap agent context at session start — read project state, check environment, align on goals |
 | `handoff` | Update the master HANDOFF.md with distilled knowledge and write a timestamped session log |
 | `pr-review` | Request and manage pull request reviews using pr-agent, with optional Claude second-pass |
-| `merge-pr` | Safely merge an approved PR, clean up branches, and sync the local repository |
+| `merge-pr` | Safely merge an approved PR/MR (GitHub `gh` or GitLab `glab`), clean up branches, and sync the local repository |
 | `ss-branch-strategy` | Branch naming, default-branch rules, and fork workflow for Silverstripe CMS major version upgrades |
 | `ddev-legacy-php` | Enable EOL PHP versions (5.6–7.4) in DDEV v1.24+ on Apple Silicon (ARM64) |
 | `ddev-sync` | Start DDEV, sync the remote database and assets to local, and run the framework build step |
@@ -76,7 +76,7 @@ Once installed, skills activate automatically based on your request. For example
 - *"onboard me on this project"* → `onboard`
 - *"update the handoff"* → `handoff`
 - *"review this PR"* → `pr-review`
-- *"merge the approved PR"* → `merge-pr`
+- *"merge the approved PR"* or *"merge MR !75"* → `merge-pr`
 - *"ddev sync"* or *"sync remote database"* → `ddev-sync`
 - *"pull remote database to local"* or *"sync from remote server"* → `server-sync`
 - *"deploy to staging"* or *"push local data to pre-prod"* → `server-deploy`
