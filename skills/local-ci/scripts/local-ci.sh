@@ -499,6 +499,11 @@ php_checks() { # dir
     # setup is host-specific.
     local unit_cfg; unit_cfg="$(first_existing phpunit.xml phpunit.xml.dist || true)"
     if [ -n "$unit_cfg" ] && [ -x "$VENDOR_BIN/phpunit" ]; then
+      # The override applies to the whole phpunit run, not just DB creation
+      # — SilverStripe's TempDatabase bootstrap is part of the same process,
+      # there's no separate phase to scope it to. Note it in the console
+      # output so a run isn't silently root'd with no visible signal.
+      [ -n "$PRE" ] && printf '   \033[90m(DDEV-routed: overriding SS_DATABASE_USERNAME/PASSWORD to root/root for this phpunit run only, not written to .env)\033[0m\n'
       run_check "PHP[$d]: phpunit" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' env SS_DATABASE_USERNAME=root SS_DATABASE_PASSWORD=root "'"$VENDOR_BIN_RUN"'/phpunit" --colors=always; else "'"$VENDOR_BIN_RUN"'/phpunit" --colors=always; fi'
     elif [ -n "$unit_cfg" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpunit (adopted via config but $VENDOR_BIN/phpunit missing)"
@@ -551,6 +556,16 @@ js_checks() { # dir
   ( cd "$d" || return 0
     [ -f package.json ] || return 0
     mark_config_seen js "$d"
+    # A package.json with node_modules/ already present and no lint script,
+    # eslint config, build script, or test script legitimately has nothing
+    # left for this driver to do — that's not a driver bug, it's a
+    # dependency-only package.json. Snapshot the row count now and compare
+    # at the end (see the trailing check below) rather than hand-tracking
+    # every branch: whichever path this function takes, if it genuinely
+    # recorded nothing, that's made explicit as its own SKIP row instead of
+    # silently reaching mark_config_seen's "recognised" without ever
+    # explaining why nothing followed.
+    local RESULTS_BEFORE; RESULTS_BEFORE="$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)"
     command -v node >/dev/null 2>&1 || { record WARN "JS[$d]: node not found on host"; return 0; }
 
     # use .nvmrc if nvm is available
@@ -608,6 +623,11 @@ js_checks() { # dir
         run_check "JS[$d]: test" gate npm test
       fi
     fi
+
+    local RESULTS_AFTER; RESULTS_AFTER="$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)"
+    if [ "$RESULTS_AFTER" -eq "$RESULTS_BEFORE" ]; then
+      record SKIP "JS[$d]: nothing to check (package.json present, dependencies already installed, no lint/build/test script or eslint config)"
+    fi
   )
 }
 
@@ -635,7 +655,17 @@ py_checks() { # dir
     # src/pkg/mod.py must still set has_py. Skips dot-dirs and dep dirs.
     [ -n "$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist -o -name site-packages \) -prune -o -name '*.py' -type f -print 2>/dev/null | head -1)" ] && has_py=1
     [ -d tests ] && has_py=1
-    [ "$has_py" -eq 1 ] || { first_existing pyproject.toml requirements.txt >/dev/null || return 0; }
+    if [ "$has_py" -ne 1 ] && ! first_existing pyproject.toml requirements.txt >/dev/null; then
+      # A marker file exists (pytest.ini/tox.ini/setup.cfg/ruff.toml/
+      # .ruff.toml — pyproject.toml/requirements.txt are handled by has_py
+      # above) but there's no actual Python source, tests/, or dependency
+      # manifest to check — legitimately nothing to do, not a driver bug.
+      # Record it explicitly rather than returning with zero rows: a config
+      # recognised but silently unexamined reads as this driver having gone
+      # wrong, not as "there was nothing here."
+      record SKIP "PY[$d]: nothing to check (marker file present but no Python source, tests/, pyproject.toml, or requirements.txt found)"
+      return 0
+    fi
 
     # Resolve a project-local venv first: a uv/venv-managed project's
     # pytest/ruff typically live only in .venv/bin — invisible to `command -v`
@@ -724,6 +754,11 @@ py_checks() { # dir
       run_check "PY[$d]: ruff" gate bash -c "$RUFF check ."
     elif [ "$ruff_adopted" -eq 1 ]; then
       record WARN "PY[$d]: ruff (adopted via config but ruff is not installed)"
+    else
+      # Not adopted and not installed — a normal, common state for a Python
+      # project that simply doesn't use ruff. Record it so mark_config_seen
+      # (above) is never left unexplained by silence (workflow-skills#72).
+      record SKIP "PY[$d]: ruff (not adopted, not installed — nothing to check)"
     fi
 
     # pytest — prefer the venv's own binary (see VENV_BIN above), then a
@@ -760,6 +795,12 @@ py_checks() { # dir
       record SKIP "PY[$d]: pytest (no tests found)"
     elif [ "$has_tests" -eq 1 ]; then
       record WARN "PY[$d]: pytest (tests present but pytest is not installed/importable)"
+    else
+      # pytest unresolvable AND no tests found — a normal, common state
+      # (e.g. requirements.txt-only project with no test suite yet). Record
+      # it so mark_config_seen (above) is never left unexplained by silence
+      # (workflow-skills#72).
+      record SKIP "PY[$d]: pytest (not installed, no tests found — nothing to check)"
     fi
   )
 }
@@ -902,19 +943,43 @@ for d in "${DIRS[@]}"; do
   custom_checks "$d"
 done
 
+# ----- reconcile config recognition vs recorded rows ----------------------
+# CONFIG_SEEN_FILE and RESULTS_FILE are two independent run-global temp
+# files; comparing them only in aggregate (RESULTS_FILE totally empty) would
+# mask a single dir/driver going silent the moment ANY OTHER dir/driver in
+# the same multi-dir scan legitimately records a row — the common case, not
+# the edge case, once DIRS has more than one entry (the default scan already
+# covers ".", frontend/, client/, backend/, app/ — see DIRS above). Reconcile
+# per (driver, dir) instead of just checking emptiness: every driver's own
+# labels consistently start with "<PREFIX>[<dir>]:" (PHP/JS/PY/shell/custom —
+# see each *_checks function's record/run_check calls), so a driver that
+# mark_config_seen'd a dir but never wrote a single row under that exact
+# prefix+dir is caught here as its own WARN, not folded into (and hidden
+# by) a coarse whole-run message (workflow-skills#72).
+if [ -s "$CONFIG_SEEN_FILE" ]; then
+  while IFS=$'\t' read -r driver seen_dir; do
+    [ -z "$driver" ] && continue
+    prefix=""
+    case "$driver" in
+      php) prefix=PHP ;;
+      js) prefix=JS ;;
+      py) prefix=PY ;;
+      sh) prefix=shell ;;
+      custom) prefix=custom ;;
+    esac
+    [ -n "$prefix" ] || continue
+    needle="$(printf '\t%s[%s]:' "$prefix" "$seen_dir")"
+    if ! grep -qF "$needle" "$RESULTS_FILE" 2>/dev/null; then
+      record WARN "$prefix[$seen_dir]: config recognised but nothing was recorded for this driver — this is a local-ci bug, not evidence there's nothing to check here. Please report it."
+    fi
+  done < "$CONFIG_SEEN_FILE"
+fi
+
 # ----- summary -----------------------------------------------------------
 hdr "SUMMARY"
 FAILED=0
 if [ ! -s "$RESULTS_FILE" ]; then
-  if [ -s "$CONFIG_SEEN_FILE" ]; then
-    # A driver recognised a real config (composer.json, package.json, a
-    # Python marker file, *.sh sources, or .local-ci.json) but recorded
-    # nothing at all — that's a local-ci bug surfaced generically, not
-    # evidence this project has no CI surface to check (workflow-skills#72).
-    echo "Check configs were recognised, but nothing was recorded — this is a local-ci bug, not evidence this project has nothing to check. Please report it."
-  else
-    echo "No recognised check configs found — nothing to run."
-  fi
+  echo "No recognised check configs found — nothing to run."
 else
   # Not "status": zsh treats that as a read-only special (its $? alias), and
   # `read -r status ...` under zsh (whether invoked directly or via a caller

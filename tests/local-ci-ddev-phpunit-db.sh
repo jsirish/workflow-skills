@@ -104,7 +104,7 @@ $out" ;;
 # ===== Part B: non-DDEV — the override must NOT appear
 
 run_part_b() {
-  local work fixture out marker
+  local work fixture stub_bin out marker
   work="$(mktemp -d "${TMPDIR:-/tmp}/local-ci-test-ddevdb-b.XXXXXX")"
   TMP_DIRS+=("$work")
   fixture="$work/proj"
@@ -117,9 +117,13 @@ EOF
 <phpunit></phpunit>
 EOF
   marker="LOCAL_CI_TEST_PHPUNIT_RAN_$$"
+  # Echo the actual key=value pair the process sees, not just the bare
+  # value — a bare value can never prove the *variable name* wasn't set,
+  # which is what this case needs to disprove. Falls back to "unset" so the
+  # assertion below has something concrete to match against either way.
   cat > "$fixture/vendor/bin/phpunit" <<EOF
 #!/usr/bin/env bash
-echo "$marker" "\$SS_DATABASE_USERNAME"
+echo "$marker" "SS_DATABASE_USERNAME=\${SS_DATABASE_USERNAME:-unset}"
 exit 0
 EOF
   chmod +x "$fixture/vendor/bin/phpunit"
@@ -140,10 +144,10 @@ EOF
 $out" ;;
   esac
   case "$out" in
-    *"SS_DATABASE_USERNAME=root"*)
-      fail "Part B (non-DDEV): root/root override applied on a non-DDEV project — should never fire without .ddev/config.yaml. Output:
+    *"SS_DATABASE_USERNAME=unset"*) pass "Part B (non-DDEV): no root/root override applied" ;;
+    *)
+      fail "Part B (non-DDEV): expected SS_DATABASE_USERNAME=unset (no override on a non-DDEV project); not found — either the override leaked in, or the stub's own env-print never ran. Output:
 $out" ;;
-    *) pass "Part B (non-DDEV): no root/root override applied" ;;
   esac
 }
 
