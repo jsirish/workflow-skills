@@ -95,10 +95,23 @@ RESULTS_FILE="$(mktemp -t local-ci.XXXXXX)"
 # and "frontend" when frontend/ is both its own DIRS entry and already
 # picked up by the root scan (git ls-files '*.sh' matches at any depth).
 SH_SEEN_FILE="$(mktemp -t local-ci-sh-seen.XXXXXX)"
-trap 'rm -f "$RESULTS_FILE" "$SH_SEEN_FILE"' EXIT
+# "No recognised check configs found" (the SUMMARY's empty-RESULTS_FILE
+# branch) previously meant two different things: genuinely no check configs
+# anywhere, or a driver bug that recognised a config but recorded nothing
+# (workflow-skills#72 — surfaced by #71, where an unresolvable pytest with
+# tests present recorded zero rows even though pyproject.toml + tests/ were
+# right there). Track config recognition independently of RESULTS_FILE rows,
+# via the same subshell-surviving temp-file pattern, so the SUMMARY can tell
+# "nothing to run" apart from "local-ci itself went silent on a real config."
+CONFIG_SEEN_FILE="$(mktemp -t local-ci-config-seen.XXXXXX)"
+trap 'rm -f "$RESULTS_FILE" "$SH_SEEN_FILE" "$CONFIG_SEEN_FILE"' EXIT
 
 record() { # status label
   printf '%s\t%s\n' "$1" "$2" >> "$RESULTS_FILE"
+}
+
+mark_config_seen() { # driver dir
+  printf '%s\t%s\n' "$1" "$2" >> "$CONFIG_SEEN_FILE"
 }
 
 # Central executor — in --dry-run, echo the command and succeed; else run it.
@@ -304,6 +317,7 @@ php_checks() { # dir
   local d="$1"
   ( cd "$d" || return 0
     [ -f composer.json ] || return 0
+    mark_config_seen php "$d"
 
     # Resolved once per dir (not re-derived independently for composer vs.
     # the PHP tool runner below) - ddev_root_for does real filesystem work,
@@ -467,9 +481,30 @@ php_checks() { # dir
     # vendor/ to actually exist — under --dry-run against a fresh checkout,
     # composer install is only planned (not run), so vendor/'s absence there
     # reflects the skipped install, not a real missing-binary problem.
+    #
+    # DDEV-routed runs (PRE non-empty — same signal php_checks already
+    # computed once above, not re-derived) need a DB override just for this
+    # invocation. SilverStripe's SapphireTest/TempDatabase bootstrap creates
+    # a fresh, randomly-named ss_tmpdb_* database per run using the project's
+    # configured SS_DATABASE_USERNAME/PASSWORD — normally DDEV's restricted
+    # `db` user, correct for the app's own runtime access but unable to
+    # CREATE DATABASE for an arbitrary new name, so every DDEV PHPUnit run
+    # would otherwise fail at DB setup before a single test runs (workflow-
+    # skills#80). DDEV ships root/root as its default full-privilege MySQL
+    # user (a DDEV convention, not universal) — override to it via `env`,
+    # scoped to this one `ddev exec` call, never written to the project's
+    # .env, so the app's normal runtime DB access stays on the restricted
+    # user. Not applied on the non-DDEV path (PRE empty): root/root is
+    # meaningless there, and a local MySQL install's real admin user/db
+    # setup is host-specific.
     local unit_cfg; unit_cfg="$(first_existing phpunit.xml phpunit.xml.dist || true)"
     if [ -n "$unit_cfg" ] && [ -x "$VENDOR_BIN/phpunit" ]; then
-      run_check "PHP[$d]: phpunit" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' "'"$VENDOR_BIN_RUN"'/phpunit" --colors=always; else "'"$VENDOR_BIN_RUN"'/phpunit" --colors=always; fi'
+      # The override applies to the whole phpunit run, not just DB creation
+      # — SilverStripe's TempDatabase bootstrap is part of the same process,
+      # there's no separate phase to scope it to. Note it in the console
+      # output so a run isn't silently root'd with no visible signal.
+      [ -n "$PRE" ] && printf '   \033[90m(DDEV-routed: overriding SS_DATABASE_USERNAME/PASSWORD to root/root for this phpunit run only, not written to .env)\033[0m\n'
+      run_check "PHP[$d]: phpunit" gate bash -c 'if [ -n "'"$PRE"'" ]; then '"$PRE"' env SS_DATABASE_USERNAME=root SS_DATABASE_PASSWORD=root "'"$VENDOR_BIN_RUN"'/phpunit" --colors=always; else "'"$VENDOR_BIN_RUN"'/phpunit" --colors=always; fi'
     elif [ -n "$unit_cfg" ] && [ -d vendor ]; then
       record WARN "PHP[$d]: phpunit (adopted via config but $VENDOR_BIN/phpunit missing)"
     fi
@@ -520,6 +555,17 @@ js_checks() { # dir
   local d="$1"
   ( cd "$d" || return 0
     [ -f package.json ] || return 0
+    mark_config_seen js "$d"
+    # A package.json with node_modules/ already present and no lint script,
+    # eslint config, build script, or test script legitimately has nothing
+    # left for this driver to do — that's not a driver bug, it's a
+    # dependency-only package.json. Snapshot the row count now and compare
+    # at the end (see the trailing check below) rather than hand-tracking
+    # every branch: whichever path this function takes, if it genuinely
+    # recorded nothing, that's made explicit as its own SKIP row instead of
+    # silently reaching mark_config_seen's "recognised" without ever
+    # explaining why nothing followed.
+    local RESULTS_BEFORE; RESULTS_BEFORE="$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)"
     command -v node >/dev/null 2>&1 || { record WARN "JS[$d]: node not found on host"; return 0; }
 
     # use .nvmrc if nvm is available
@@ -561,6 +607,14 @@ js_checks() { # dir
       elif [ "$HAS_ESLINT_CFG" -eq 1 ] && command -v npx >/dev/null 2>&1; then
         # Flat/legacy eslint config present but no lint script — run eslint directly.
         run_check "JS[$d]: lint (eslint)" lint bash -c 'npx --no-install eslint . --no-error-on-unmatched-pattern'
+      elif [ "$HAS_ESLINT_CFG" -eq 1 ]; then
+        # eslint config adopted but npx isn't available to run it — same
+        # "adopted but unavailable" shape phpcs/phpstan/ruff/pytest all
+        # WARN on. Without this, the trailing "nothing to check" fallback
+        # below would otherwise assert no eslint config exists at all,
+        # which is false and actively worse than the silence it replaced
+        # (found on review round 2 of workflow-skills#72's fix).
+        record WARN "JS[$d]: lint (eslint config present but npx is not available to run it)"
       fi
     fi
 
@@ -577,6 +631,11 @@ js_checks() { # dir
         run_check "JS[$d]: test" gate npm test
       fi
     fi
+
+    local RESULTS_AFTER; RESULTS_AFTER="$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)"
+    if [ "$RESULTS_AFTER" -eq "$RESULTS_BEFORE" ]; then
+      record SKIP "JS[$d]: nothing to check (package.json present, dependencies already installed, no lint/build/test script or eslint config)"
+    fi
   )
 }
 
@@ -584,13 +643,37 @@ js_checks() { # dir
 py_checks() { # dir
   local d="$1"
   ( cd "$d" || return 0
-    first_existing pyproject.toml requirements.txt pytest.ini tox.ini setup.cfg ruff.toml .ruff.toml >/dev/null || return 0
+    if ! first_existing pyproject.toml requirements.txt pytest.ini tox.ini setup.cfg ruff.toml .ruff.toml >/dev/null; then
+      # No recognised Python project marker. Before bailing with zero rows
+      # recorded, check whether real test files exist anyway (e.g. a bare
+      # setup.py, or a project managing deps some other way) — same
+      # recursive test-file detection used below for has_tests. Same
+      # silent-failure shape #71 targeted one gate later; this closes it one
+      # gate earlier so a directory with genuine Python tests never vanishes
+      # from the SUMMARY with no signal at all, just because it carries none
+      # of the marker files above.
+      if [ -n "$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist -o -name site-packages \) -prune -o \( -name 'test_*.py' -o -name '*_test.py' \) -type f -print 2>/dev/null | head -1)" ]; then
+        record WARN "PY[$d]: Python test files found but no recognised Python project marker (pyproject.toml/requirements.txt/pytest.ini/tox.ini/setup.cfg/ruff.toml/.ruff.toml)"
+      fi
+      return 0
+    fi
+    mark_config_seen py "$d"
     local has_py; has_py=0
     # Recursive source detection (not just top-level): a package layout like
     # src/pkg/mod.py must still set has_py. Skips dot-dirs and dep dirs.
     [ -n "$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist -o -name site-packages \) -prune -o -name '*.py' -type f -print 2>/dev/null | head -1)" ] && has_py=1
     [ -d tests ] && has_py=1
-    [ "$has_py" -eq 1 ] || { first_existing pyproject.toml requirements.txt >/dev/null || return 0; }
+    if [ "$has_py" -ne 1 ] && ! first_existing pyproject.toml requirements.txt >/dev/null; then
+      # A marker file exists (pytest.ini/tox.ini/setup.cfg/ruff.toml/
+      # .ruff.toml — pyproject.toml/requirements.txt are handled by has_py
+      # above) but there's no actual Python source, tests/, or dependency
+      # manifest to check — legitimately nothing to do, not a driver bug.
+      # Record it explicitly rather than returning with zero rows: a config
+      # recognised but silently unexamined reads as this driver having gone
+      # wrong, not as "there was nothing here."
+      record SKIP "PY[$d]: nothing to check (marker file present but no Python source, tests/, pyproject.toml, or requirements.txt found)"
+      return 0
+    fi
 
     # Resolve a project-local venv first: a uv/venv-managed project's
     # pytest/ruff typically live only in .venv/bin — invisible to `command -v`
@@ -652,10 +735,23 @@ py_checks() { # dir
     # Prefer the venv's own ruff over a global one: a stray older/newer
     # global install can silently disagree with the project's pinned version
     # on default rule selection for the same config file.
+    # A venv ruff that exists and is +x isn't necessarily usable — a stale
+    # symlink into a deleted virtualenv, or a half-written file from an
+    # interrupted install, passes [ -x ... ] but errors on invocation. Sanity
+    # check with --version before trusting it; a broken venv copy otherwise
+    # falls through to the global/system resolution with no signal at all,
+    # silently running against a different dependency set than the project
+    # pins (workflow-skills#75).
     local RUFF=""
-    if [ -n "$VENV_BIN" ] && [ -x "$VENV_BIN/ruff" ]; then RUFF="$VENV_BIN_Q/ruff";
-    elif command -v ruff >/dev/null 2>&1; then RUFF="ruff";
-    elif [ -n "$PY" ] && $PY -c 'import ruff' >/dev/null 2>&1; then RUFF="$PY -m ruff"; fi
+    if [ -n "$VENV_BIN" ] && [ -x "$VENV_BIN/ruff" ]; then
+      if "$VENV_BIN/ruff" --version >/dev/null 2>&1; then
+        RUFF="$VENV_BIN_Q/ruff"
+      else
+        record WARN "PY[$d]: venv ruff ($VENV_BIN/ruff) exists but failed a --version sanity check (stale symlink into a deleted venv, or a broken install?) — skipped, falling back to a global/system resolution instead of silently using it"
+      fi
+    fi
+    if [ -z "$RUFF" ] && command -v ruff >/dev/null 2>&1; then RUFF="ruff";
+    elif [ -z "$RUFF" ] && [ -n "$PY" ] && $PY -c 'import ruff' >/dev/null 2>&1; then RUFF="$PY -m ruff"; fi
     if [ -n "$RUFF" ] && [ "$ruff_adopted" -eq 0 ]; then
       record SKIP "PY[$d]: ruff (no ruff config — project has not adopted ruff)"
     elif [ -n "$RUFF" ]; then
@@ -666,6 +762,11 @@ py_checks() { # dir
       run_check "PY[$d]: ruff" gate bash -c "$RUFF check ."
     elif [ "$ruff_adopted" -eq 1 ]; then
       record WARN "PY[$d]: ruff (adopted via config but ruff is not installed)"
+    else
+      # Not adopted and not installed — a normal, common state for a Python
+      # project that simply doesn't use ruff. Record it so mark_config_seen
+      # (above) is never left unexplained by silence (workflow-skills#72).
+      record SKIP "PY[$d]: ruff (not adopted, not installed — nothing to check)"
     fi
 
     # pytest — prefer the venv's own binary (see VENV_BIN above), then a
@@ -674,10 +775,19 @@ py_checks() { # dir
     # does not add cwd to sys.path on its own (only `python -m pytest` does
     # that natively), so suites that import top-level modules by cwd would
     # otherwise false-FAIL with ModuleNotFoundError.
+    # Same broken-but-resolvable hazard as ruff above (workflow-skills#75):
+    # sanity check the venv pytest with --version before trusting it, rather
+    # than falling through to a global/system resolution with no signal.
     local PYTEST=""
-    if [ -n "$VENV_BIN" ] && [ -x "$VENV_BIN/pytest" ]; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" $VENV_BIN_Q/pytest";
-    elif command -v pytest >/dev/null 2>&1; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" pytest";
-    elif [ -n "$PY" ] && $PY -c 'import pytest' >/dev/null 2>&1; then PYTEST="$PY -m pytest"; fi
+    if [ -n "$VENV_BIN" ] && [ -x "$VENV_BIN/pytest" ]; then
+      if "$VENV_BIN/pytest" --version >/dev/null 2>&1; then
+        PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" $VENV_BIN_Q/pytest"
+      else
+        record WARN "PY[$d]: venv pytest ($VENV_BIN/pytest) exists but failed a --version sanity check (stale symlink into a deleted venv, or a broken install?) — skipped, falling back to a global/system resolution instead of silently using it"
+      fi
+    fi
+    if [ -z "$PYTEST" ] && command -v pytest >/dev/null 2>&1; then PYTEST="PYTHONPATH=\"\$PWD\${PYTHONPATH:+:\$PYTHONPATH}\" pytest";
+    elif [ -z "$PYTEST" ] && [ -n "$PY" ] && $PY -c 'import pytest' >/dev/null 2>&1; then PYTEST="$PY -m pytest"; fi
 
     # Recursive test detection: test files may live in nested packages
     # rather than at the top level or in a tests/ dir. Computed independently
@@ -693,6 +803,12 @@ py_checks() { # dir
       record SKIP "PY[$d]: pytest (no tests found)"
     elif [ "$has_tests" -eq 1 ]; then
       record WARN "PY[$d]: pytest (tests present but pytest is not installed/importable)"
+    else
+      # pytest unresolvable AND no tests found — a normal, common state
+      # (e.g. requirements.txt-only project with no test suite yet). Record
+      # it so mark_config_seen (above) is never left unexplained by silence
+      # (workflow-skills#72).
+      record SKIP "PY[$d]: pytest (not installed, no tests found — nothing to check)"
     fi
   )
 }
@@ -718,6 +834,7 @@ sh_checks() { # dir
       files="$(find . \( -name '.?*' -o -name node_modules -o -name vendor -o -name 'venv*' -o -name env -o -name build -o -name dist \) -prune -o -name '*.sh' -type f -print 2>/dev/null)"
     fi
     [ -n "$files" ] || return 0
+    mark_config_seen sh "$d"
 
     # Adoption evidence: an explicit .shellcheckrc, or --with-shellcheck.
     # Deliberately config-only (mirrors ruff_adopted above) — no "shell-only
@@ -786,6 +903,7 @@ custom_checks() { # dir
   local d="$1"
   ( cd "$d" || return 0
     [ -f .local-ci.json ] || return 0
+    mark_config_seen custom "$d"
 
     if ! command -v jq >/dev/null 2>&1; then
       record WARN "custom[$d]: .local-ci.json present but jq is not installed to parse it"
@@ -794,6 +912,16 @@ custom_checks() { # dir
 
     if ! jq -e '.checks | type == "array"' .local-ci.json >/dev/null 2>&1; then
       record FAIL "custom[$d]: .local-ci.json (malformed — expected {\"checks\":[{\"label\":...,\"run\":...}]})"
+      return 0
+    fi
+
+    if [ "$(jq -r '.checks | length' .local-ci.json 2>/dev/null || echo 0)" -eq 0 ]; then
+      # A valid but empty checks array is a legitimate, deliberate state
+      # (a placeholder .local-ci.json, or every check temporarily commented
+      # out) — not a driver bug. Record it explicitly so the generic
+      # per-(driver,dir) reconciliation in the SUMMARY never has to guess;
+      # same shape as the js/py "recognised, nothing to do" fixes above.
+      record SKIP "custom[$d]: .local-ci.json present but declares no checks"
       return 0
     fi
 
@@ -832,6 +960,38 @@ for d in "${DIRS[@]}"; do
   sh_checks "$d"
   custom_checks "$d"
 done
+
+# ----- reconcile config recognition vs recorded rows ----------------------
+# CONFIG_SEEN_FILE and RESULTS_FILE are two independent run-global temp
+# files; comparing them only in aggregate (RESULTS_FILE totally empty) would
+# mask a single dir/driver going silent the moment ANY OTHER dir/driver in
+# the same multi-dir scan legitimately records a row — the common case, not
+# the edge case, once DIRS has more than one entry (the default scan already
+# covers ".", frontend/, client/, backend/, app/ — see DIRS above). Reconcile
+# per (driver, dir) instead of just checking emptiness: every driver's own
+# labels consistently start with "<PREFIX>[<dir>]:" (PHP/JS/PY/shell/custom —
+# see each *_checks function's record/run_check calls), so a driver that
+# mark_config_seen'd a dir but never wrote a single row under that exact
+# prefix+dir is caught here as its own WARN, not folded into (and hidden
+# by) a coarse whole-run message (workflow-skills#72).
+if [ -s "$CONFIG_SEEN_FILE" ]; then
+  while IFS=$'\t' read -r driver seen_dir; do
+    [ -z "$driver" ] && continue
+    prefix=""
+    case "$driver" in
+      php) prefix=PHP ;;
+      js) prefix=JS ;;
+      py) prefix=PY ;;
+      sh) prefix=shell ;;
+      custom) prefix=custom ;;
+    esac
+    [ -n "$prefix" ] || continue
+    needle="$(printf '\t%s[%s]:' "$prefix" "$seen_dir")"
+    if ! grep -qF "$needle" "$RESULTS_FILE" 2>/dev/null; then
+      record WARN "$prefix[$seen_dir]: config recognised but nothing was recorded for this driver — this is a local-ci bug, not evidence there's nothing to check here. Please report it."
+    fi
+  done < "$CONFIG_SEEN_FILE"
+fi
 
 # ----- summary -----------------------------------------------------------
 hdr "SUMMARY"
