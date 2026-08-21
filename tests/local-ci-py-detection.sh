@@ -36,6 +36,22 @@
 # the fixture never provides). Case 5 below is the one case that turns
 # $VIRTUAL_ENV back on deliberately, to test that exact fallback path.
 #
+# Cases 7-9 cover two later, related py_checks() silent-failure gaps found by
+# silent-failure-hunter review on PR #73 (deliberately deferred from that PR,
+# same pattern as #70/#71 above):
+#
+# #74: py_checks()'s own marker-file gate (pyproject.toml/requirements.txt/
+# pytest.ini/tox.ini/setup.cfg/ruff.toml/.ruff.toml) returns 0 with zero rows
+# recorded for a directory that has none of those but does have real
+# test_*.py files (e.g. a bare setup.py project) — the #71 WARN never even
+# executes because this earlier gate exits the function first. Case 7.
+#
+# #75: a resolvable-but-broken venv pytest/ruff — exists on disk, passes
+# [ -x ... ], but errors on invocation (a stale symlink into a deleted
+# virtualenv, a half-written file from an interrupted install) — silently
+# fell through to a global/system resolution with no signal that the venv
+# copy was skipped as broken. Cases 8 and 9.
+#
 # Plain bash, no test framework dependency — mirrors local-ci-vendor-bin.sh.
 
 set -uo pipefail
@@ -453,12 +469,182 @@ $out" ;;
   esac
 }
 
+# ===== Case 7 (#74): py_checks()'s own config-detection gate is silent when
+# it bails — a dir with real test_*.py files but none of the recognised
+# marker files (pyproject.toml/requirements.txt/pytest.ini/tox.ini/
+# setup.cfg/ruff.toml/.ruff.toml) must record a WARN naming the gap, not
+# vanish from the SUMMARY with zero rows.
+
+run_case7() {
+  local bin work fixture out
+  if ! bin="$(build_exclusive_bin 2>/tmp/local-ci-test-case7-missing.$$)"; then
+    skip "Case 7 (#74): cannot build exclusive PATH — missing:$(cat /tmp/local-ci-test-case7-missing.$$ | sed 's/^MISSING://')"
+    rm -f "/tmp/local-ci-test-case7-missing.$$"
+    return
+  fi
+  rm -f "/tmp/local-ci-test-case7-missing.$$"
+
+  work="$(mktemp -d "${TMPDIR:-/tmp}/local-ci-test-case7.XXXXXX")"
+  TMP_DIRS+=("$work")
+  fixture="$work/proj"
+  # Deliberately no pyproject.toml/requirements.txt/pytest.ini/tox.ini/
+  # setup.cfg/ruff.toml/.ruff.toml — only a bare setup.py (a real project
+  # layout the marker-file gate doesn't recognise) plus a real test file.
+  mkdir -p "$fixture/tests"
+  cat > "$fixture/setup.py" <<'EOF'
+from setuptools import setup
+setup(name="repro")
+EOF
+  cat > "$fixture/tests/test_ok.py" <<'EOF'
+def test_ok():
+    assert True
+EOF
+
+  out="$(cd "$work" && PATH="$bin" VIRTUAL_ENV= bash "$LOCAL_CI" --no-fix "$fixture" 2>&1)"
+
+  case "$out" in
+    *"Python test files found but no recognised Python project marker"*)
+      pass "Case 7 (#74): WARN recorded for tests-without-marker-file" ;;
+    *)
+      fail "Case 7 (#74): expected the no-marker-file WARN; none printed. Output:
+$out" ;;
+  esac
+  case "$out" in
+    *"No recognised check configs found"*)
+      fail "Case 7 (#74): SUMMARY still claims nothing was found, despite the WARN above. Output:
+$out" ;;
+    *) pass "Case 7 (#74): SUMMARY does not falsely claim nothing was found" ;;
+  esac
+}
+
+# ===== Case 8 (#75): a resolvable-but-broken venv pytest — exists, +x, but
+# errors on invocation (stale symlink into a deleted venv, half-written
+# install) — must WARN and fall back, not silently run against a different
+# dependency set.
+
+run_case8() {
+  local bin work fixture venv_dir out
+  if ! bin="$(build_exclusive_bin 2>/tmp/local-ci-test-case8-missing.$$)"; then
+    skip "Case 8 (#75): cannot build exclusive PATH — missing:$(cat /tmp/local-ci-test-case8-missing.$$ | sed 's/^MISSING://')"
+    rm -f "/tmp/local-ci-test-case8-missing.$$"
+    return
+  fi
+  rm -f "/tmp/local-ci-test-case8-missing.$$"
+  cat > "$bin/python3" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$bin/python3"
+
+  work="$(mktemp -d "${TMPDIR:-/tmp}/local-ci-test-case8.XXXXXX")"
+  TMP_DIRS+=("$work")
+  fixture="$work/proj"
+  mkdir -p "$fixture/tests"
+  cat > "$fixture/pyproject.toml" <<'EOF'
+[project]
+name = "repro"
+version = "0.1.0"
+EOF
+  cat > "$fixture/tests/test_ok.py" <<'EOF'
+def test_ok():
+    assert True
+EOF
+
+  venv_dir="$fixture/.venv"
+  mkdir -p "$venv_dir/bin"
+  # VENV_BIN only resolves to ./.venv/bin at all once ./.venv/bin/python3
+  # exists and is +x (see local-ci.sh's VENV_BIN resolution) — a working
+  # stub, distinct from the broken pytest binary this case is about.
+  cat > "$venv_dir/bin/python3" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$venv_dir/bin/python3"
+  # Broken stub: +x, resolvable, but errors on every invocation including
+  # --version — the exact "resolvable but unusable" shape #75 describes.
+  cat > "$venv_dir/bin/pytest" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$venv_dir/bin/pytest"
+
+  out="$(cd "$work" && PATH="$bin" VIRTUAL_ENV= bash "$LOCAL_CI" --no-fix "$fixture" 2>&1)"
+
+  case "$out" in
+    *"venv pytest"*"failed a --version sanity check"*)
+      pass "Case 8 (#75): WARN recorded for a broken venv pytest" ;;
+    *)
+      fail "Case 8 (#75): expected the broken-venv-pytest WARN; none printed. Output:
+$out" ;;
+  esac
+}
+
+# ===== Case 9 (#75): same broken-but-resolvable hazard for ruff.
+
+run_case9() {
+  local bin work fixture venv_dir out
+  if ! bin="$(build_exclusive_bin 2>/tmp/local-ci-test-case9-missing.$$)"; then
+    skip "Case 9 (#75): cannot build exclusive PATH — missing:$(cat /tmp/local-ci-test-case9-missing.$$ | sed 's/^MISSING://')"
+    rm -f "/tmp/local-ci-test-case9-missing.$$"
+    return
+  fi
+  rm -f "/tmp/local-ci-test-case9-missing.$$"
+  cat > "$bin/python3" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$bin/python3"
+
+  work="$(mktemp -d "${TMPDIR:-/tmp}/local-ci-test-case9.XXXXXX")"
+  TMP_DIRS+=("$work")
+  fixture="$work/proj"
+  mkdir -p "$fixture/tests"
+  cat > "$fixture/pyproject.toml" <<'EOF'
+[project]
+name = "repro"
+version = "0.1.0"
+
+[tool.ruff]
+line-length = 100
+EOF
+  cat > "$fixture/tests/test_ok.py" <<'EOF'
+def test_ok():
+    assert True
+EOF
+
+  venv_dir="$fixture/.venv"
+  mkdir -p "$venv_dir/bin"
+  cat > "$venv_dir/bin/python3" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$venv_dir/bin/python3"
+  cat > "$venv_dir/bin/ruff" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "$venv_dir/bin/ruff"
+
+  out="$(cd "$work" && PATH="$bin" VIRTUAL_ENV= bash "$LOCAL_CI" --no-fix "$fixture" 2>&1)"
+
+  case "$out" in
+    *"venv ruff"*"failed a --version sanity check"*)
+      pass "Case 9 (#75): WARN recorded for a broken venv ruff" ;;
+    *)
+      fail "Case 9 (#75): expected the broken-venv-ruff WARN; none printed. Output:
+$out" ;;
+  esac
+}
+
 run_case1
 run_case2
 run_case3
 run_case4
 run_case5
 run_case6
+run_case7
+run_case8
+run_case9
 
 echo
 if [ "$FAILURES" -eq 0 ]; then
