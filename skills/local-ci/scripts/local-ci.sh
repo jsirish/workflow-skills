@@ -607,6 +607,14 @@ js_checks() { # dir
       elif [ "$HAS_ESLINT_CFG" -eq 1 ] && command -v npx >/dev/null 2>&1; then
         # Flat/legacy eslint config present but no lint script — run eslint directly.
         run_check "JS[$d]: lint (eslint)" lint bash -c 'npx --no-install eslint . --no-error-on-unmatched-pattern'
+      elif [ "$HAS_ESLINT_CFG" -eq 1 ]; then
+        # eslint config adopted but npx isn't available to run it — same
+        # "adopted but unavailable" shape phpcs/phpstan/ruff/pytest all
+        # WARN on. Without this, the trailing "nothing to check" fallback
+        # below would otherwise assert no eslint config exists at all,
+        # which is false and actively worse than the silence it replaced
+        # (found on review round 2 of workflow-skills#72's fix).
+        record WARN "JS[$d]: lint (eslint config present but npx is not available to run it)"
       fi
     fi
 
@@ -904,6 +912,16 @@ custom_checks() { # dir
 
     if ! jq -e '.checks | type == "array"' .local-ci.json >/dev/null 2>&1; then
       record FAIL "custom[$d]: .local-ci.json (malformed — expected {\"checks\":[{\"label\":...,\"run\":...}]})"
+      return 0
+    fi
+
+    if [ "$(jq -r '.checks | length' .local-ci.json 2>/dev/null || echo 0)" -eq 0 ]; then
+      # A valid but empty checks array is a legitimate, deliberate state
+      # (a placeholder .local-ci.json, or every check temporarily commented
+      # out) — not a driver bug. Record it explicitly so the generic
+      # per-(driver,dir) reconciliation in the SUMMARY never has to guess;
+      # same shape as the js/py "recognised, nothing to do" fixes above.
+      record SKIP "custom[$d]: .local-ci.json present but declares no checks"
       return 0
     fi
 

@@ -20,7 +20,13 @@
 # override appears in the intercepted phpunit invocation. Part B drives the
 # plain non-DDEV case (no .ddev/config.yaml) and asserts the override does
 # NOT appear — root/root is a DDEV convention, meaningless (and never
-# applied) on bare metal.
+# applied) on bare metal. Part B's stub prints the actual
+# SS_DATABASE_USERNAME=<value> pair (not just the bare value, which could
+# never disprove the variable was set at all — code-reviewer finding on PR
+# #81 round 1); both invocations scrub SS_DATABASE_USERNAME/PASSWORD from
+# the inherited environment first, so a developer's own shell exporting
+# either (direnv, a debugging session) can't produce a spurious result in
+# either direction (round 2 finding on the same PR).
 #
 # Plain bash, no test framework dependency — mirrors the other tests/*.sh.
 
@@ -90,7 +96,7 @@ exit 0
 EOF
   chmod +x "$stub_bin/composer"
 
-  out="$(cd "$work" && PATH="$stub_bin:$PATH" bash "$LOCAL_CI" --no-fix --no-build "$fixture" 2>&1)"
+  out="$(cd "$work" && PATH="$stub_bin:$PATH" env -u SS_DATABASE_USERNAME -u SS_DATABASE_PASSWORD bash "$LOCAL_CI" --no-fix --no-build "$fixture" 2>&1)"
 
   case "$out" in
     *"DDEV_STUB_ARGV:"*"SS_DATABASE_USERNAME=root SS_DATABASE_PASSWORD=root"*"vendor/bin/phpunit"*)
@@ -136,7 +142,7 @@ exit 0
 EOF
   chmod +x "$stub_bin/composer"
 
-  out="$(cd "$work" && PATH="$stub_bin:$PATH" bash "$LOCAL_CI" --no-fix --no-build "$fixture" 2>&1)"
+  out="$(cd "$work" && PATH="$stub_bin:$PATH" env -u SS_DATABASE_USERNAME -u SS_DATABASE_PASSWORD bash "$LOCAL_CI" --no-fix --no-build "$fixture" 2>&1)"
 
   case "$out" in
     *"$marker"*) pass "Part B (non-DDEV): phpunit stub executed directly (no ddev routing)" ;;

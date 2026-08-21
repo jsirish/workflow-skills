@@ -36,13 +36,23 @@
 # per-(driver,dir) reconciliation above only ever fires for a genuinely
 # unexplained silence, not a named, ordinary one.
 #
-# Case 1 drives the reconciliation directly via `.local-ci.json` with an
-# empty `checks` array — a config custom_checks() legitimately recognises
-# (mark_config_seen fires) but records nothing for (the jq loop iterates
-# zero times), without needing to inject a synthetic bug into a driver to
-# reach it. Cases 3 and 4 drive the two false-positive fixes directly: a
-# Python project and a JS project each in a state that used to trip the old
-# whole-run message on an entirely normal project.
+# A second review round (round 2 on the same PR) found custom_checks() had
+# the identical false-positive gap js/py were just fixed for: a
+# `.local-ci.json` with a valid but empty `checks` array — a deliberate,
+# legitimate state (a placeholder file, or every check temporarily
+# commented out) — used to fall through with zero rows too, and would then
+# trip the "please report a bug" WARN the same way. Fixed the same way:
+# custom_checks() now records its own SKIP for that case. Case 1 asserts
+# that fix directly. Cases 3 and 4 do the same for py_checks/js_checks.
+#
+# With all five drivers now guaranteed to record something once
+# mark_config_seen fires, the generic per-(driver,dir) reconciliation itself
+# has no known legitimate path left to reach through a real fixture — every
+# driver explains its own silence before the reconciliation would ever need
+# to. That's the intended end state, not a coverage gap: the reconciliation
+# remains in the script as a safety net against a FUTURE driver regression
+# (a new code path that forgets to record), not something any of these
+# cases can exercise directly today.
 #
 # Plain bash, no test framework dependency — mirrors the other tests/*.sh.
 
@@ -68,7 +78,10 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-# ===== Case 1 (#72): a recognised-but-empty config must not claim "nothing found"
+# ===== Case 1 (#72, then a round-2 false-positive fix on the same PR): a
+# valid-but-empty `.local-ci.json` must not claim "nothing found", and must
+# NOT be flagged as "please report a bug" either — it's a deliberate,
+# legitimate state, not a driver going silent.
 
 run_case1() {
   local work fixture out
@@ -89,10 +102,16 @@ $out" ;;
     *) pass "Case 1 (#72): does not falsely claim no configs were recognised" ;;
   esac
   case "$out" in
-    *"custom[$fixture]: config recognised but nothing was recorded for this driver"*)
-      pass "Case 1 (#72): SUMMARY names the exact (driver, dir) gap" ;;
+    *"config recognised but nothing was recorded for this driver"*)
+      fail "Case 1: an empty-but-valid checks array triggered the 'please report a bug' WARN — that's a legitimate state, not a driver bug. Output:
+$out" ;;
+    *) pass "Case 1: no false 'please report a bug' WARN for a valid empty checks array" ;;
+  esac
+  case "$out" in
+    *"custom[$fixture]: .local-ci.json present but declares no checks"*)
+      pass "Case 1: custom driver names the empty-checks state explicitly" ;;
     *)
-      fail "Case 1 (#72): expected a 'custom[...]: config recognised but nothing was recorded' WARN naming this exact dir; not found. Output:
+      fail "Case 1: expected the 'declares no checks' SKIP naming this exact dir; not found. Output:
 $out" ;;
   esac
 }
