@@ -1,44 +1,92 @@
 ---
 name: merge-pr
-description: Use when the user asks to merge an approved Pull Request (for example, to merge a reviewed PR or run a previous `/merge_pr` workflow); safely merges the PR, cleans up associated branches, and synchronizes the local repository.
+description: Use when the user asks to merge an approved Pull Request or Merge Request (for example, to merge a reviewed PR/MR or run a previous `/merge_pr` workflow); safely merges the request, cleans up associated branches, and synchronizes the local repository. Works with GitHub (`gh`) and GitLab (`glab`).
 ---
 
 # Skill: Merge PR
 
-**Goal:** Safely merge an approved Pull Request, clean up associated branches, and synchronize the local repository.
+**Goal:** Safely merge an approved Pull/Merge Request, clean up associated branches, and synchronize the local repository.
+
+The workflow is host-agnostic — the phases are the same everywhere; only the CLI and status-field names differ. GitHub calls it a Pull Request (`gh`), GitLab a Merge Request (`glab`); "PR" below means either.
+
+---
+
+## Phase 0: Detect the Host
+
+```bash
+git remote get-url origin
+```
+
+| Remote host | CLI | Verify with |
+|---|---|---|
+| `github.com` (or GitHub Enterprise) | `gh` | `gh auth status` |
+| `gitlab.com` (or self-managed GitLab) | `glab` | `glab auth status` |
+| anything else | none assumed | — |
+
+If the host has no supported CLI, don't improvise: tell the user, and offer either a merge through the host's UI or — only if the target branch is unprotected — a plain-git merge and push.
 
 ---
 
 ## Phase 1: Pre-Merge Verification
 
-1.  **Check PR Status:**
-    ```bash
-    gh pr view <pr-number> --json state,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,headRefName,baseRefName
-    ```
-2.  **Verify Conditions:**
-    -   PR state is `OPEN`.
-    -   All CI/GitHub Action checks are passing (`statusCheckRollup`).
-    -   PR is mergeable (`mergeable: "MERGEABLE"` and `mergeStateStatus: "CLEAN"`).
-    -   Confirm explicit user approval to merge.
+Verify, in the host's terms:
+
+1. The PR is **open**.
+2. It is **mergeable** with **no conflicts**.
+3. CI is **passing — if CI exists**. Absence of any pipeline or checks is *not* a blocker (many repos have no CI); a failing or pending one is.
+4. Host-specific gates are satisfied (see below).
+5. The source branch on the remote actually contains the expected commits. A push can silently fail to land, and an "approved" but empty PR merges nothing — `git ls-remote origin <branch>` is proof; local state is not.
+6. Confirm explicit user approval to merge.
+
+**GitHub:**
+```bash
+gh pr view <pr-number> --json state,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,headRefName,baseRefName
+```
+-   `state: "OPEN"`, `mergeable: "MERGEABLE"`, `mergeStateStatus: "CLEAN"`.
+-   `statusCheckRollup` empty = no CI configured = fine; failures = blocker.
+
+**GitLab:**
+```bash
+glab mr view <mr-number>
+glab api "projects/:fullpath/merge_requests/<mr-number>"   # for the fields below
+```
+-   `state: "opened"`, `detailed_merge_status: "mergeable"`, `has_conflicts: false`, `draft: false`.
+-   `blocking_discussions_resolved: true` — projects often enforce resolved threads at merge; resolve them first, don't bypass.
+-   `head_pipeline: null` = no CI configured = fine; `"failed"` = blocker.
 
 > [!NOTE]
-> `reviewDecision` only gates the merge when the repo has **CODEOWNERS or
-> required reviewers** configured. Without them, GitHub leaves it empty (`""`)
-> even on a sound PR — so don't treat a blank `reviewDecision` as a blocker.
-> `state: OPEN` + `mergeable: MERGEABLE` + `mergeStateStatus: CLEAN` plus the
-> user's go-ahead are sufficient. (The field is still fetched in the `--json`
-> call above — harmless to read.)
+> Review approval is convention on both hosts unless the repo configures otherwise.
+> On GitHub, `reviewDecision` only gates the merge when **CODEOWNERS or required
+> reviewers** exist — a blank `reviewDecision` is not a blocker. On GitLab,
+> approvals are optional on the Free tier and approval *rules* are Premium — treat
+> missing approvals the same way. In both cases the user's go-ahead plus the
+> mergeability checks above are sufficient.
 
 ---
 
-## Phase 2: Squash and Merge
+## Phase 2: Merge
 
-1.  **Perform Squash Merge:**
-    ```bash
-    gh pr merge <pr-number> --squash --delete-branch --subject "<commit-subject>" --body "<commit-body>"
-    ```
-    -   **Commit Message:** Synthesize a clean, descriptive subject using conventional commits (e.g., `feat: PR title`). If the PR description contains important details, include them in the commit body.
-    -   `--delete-branch` handles the remote branch cleanup on the source repository.
+**Determine the merge strategy — do not assume squash.** Strategy is repo policy, not skill policy. Resolve it in this order:
+
+1.  An explicit instruction from the user or repo docs (`CONTRIBUTING.md`, `CLAUDE.md`).
+2.  The host's own settings:
+    -   GitHub: `gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed`
+    -   GitLab: `merge_method` and `squash_option` from `glab api "projects/:fullpath"`
+3.  Recent history: `git log --oneline --merges -5` — a history of merge commits should not suddenly acquire squashes, and vice versa.
+4.  Only then default to squash.
+
+**GitHub:**
+```bash
+gh pr merge <pr-number> --squash|--merge --delete-branch --subject "<commit-subject>" --body "<commit-body>"
+```
+
+**GitLab:**
+```bash
+glab mr merge <mr-number> [--squash] --remove-source-branch --yes
+```
+
+-   **Commit Message (when squashing):** Synthesize a clean, descriptive subject using conventional commits (e.g., `feat: PR title`). If the PR description contains important details, include them in the commit body.
+-   `--delete-branch` (gh) / `--remove-source-branch` (glab) handles the remote branch cleanup on the source repository.
 
 ---
 
@@ -97,7 +145,7 @@ ends — no manual deletion needed.
 ## Phase 4: Post-Merge Verification
 
 1.  **Verify PR Closure:**
-    Confirm that the PR is closed on GitHub and any linked issues are also addressed.
+    Confirm the PR reports merged (`gh pr view` / `glab mr view`) and any linked issues are also addressed — `Closes #N` auto-closes on both hosts.
 
 > [!NOTE]
 > **Do not auto-invoke `/handoff` from this skill.** Handoff is **user-invoked
@@ -109,7 +157,7 @@ ends — no manual deletion needed.
 
 ## Important Reminders
 
-- **`gh pr merge` is worktree-safe.** It uses the GitHub API and does not require being in the primary checkout. The Phase 3 split above is only about the local sync steps.
-- **Branch Deletion:** `gh pr merge --delete-branch` attempts to delete the PR's head/source branch after the merge when permissions allow. For PRs from forks, automatic deletion may fail or require manual deletion on the fork.
+- **CLI merges are worktree-safe.** Both `gh pr merge` and `glab mr merge` use the host's API and do not require being in the primary checkout. The Phase 3 split above is only about the local sync steps.
+- **Branch Deletion:** Automatic source-branch deletion works when permissions allow. For PRs from forks, deletion may fail or require manual cleanup on the fork.
 - **Merge Conflicts:** If the PR has conflicts, resolve them before attempting to merge.
 - **Verification:** Always verify that the merge was successful and that the primary worktree is on a clean, updated default branch.
