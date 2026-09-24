@@ -1,7 +1,7 @@
 {
   "name": "workflow-skills",
   "version": "1.0.0",
-  "description": "Cross-project agent workflow skills — session onboarding, handoffs, PR review, and merge workflows",
+  "description": "Cross-project agent workflow skills — PR review and merge workflows",
   "keywords": [
     "skills",
     "workflow",
