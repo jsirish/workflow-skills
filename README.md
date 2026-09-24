@@ -1,6 +1,8 @@
 # workflow-skills
 
-Cross-project agent skills for everyday development workflows — session onboarding, handoffs, pull request review, and merge workflows. Maintained by [Jason Irish](https://github.com/jsirish).
+Cross-project agent skills for everyday development workflows — pull request review and merge workflows. Maintained by [Jason Irish](https://github.com/jsirish).
+
+Session onboarding and handoffs moved to [dynamic/throughline](https://github.com/dynamic/throughline).
 
 These are the general, project-agnostic skills meant to run on nearly any repo, distinct from the domain-specific [silverstripe-skills](https://github.com/jsirish/silverstripe-skills) collection.
 
@@ -14,8 +16,6 @@ npx skills add jsirish/workflow-skills
 
 | Skill | Description |
 |-------|-------------|
-| `onboard` | Bootstrap agent context at session start — read project state, check environment, align on goals |
-| `handoff` | Update the master HANDOFF.md with distilled knowledge and write a timestamped session log |
 | `pr-review` | Request and manage pull request reviews using pr-agent, with optional Claude second-pass |
 | `merge-pr` | Safely merge an approved PR/MR (GitHub `gh` or GitLab `glab`), clean up branches, and sync the local repository |
 | `ss-branch-strategy` | Branch naming, default-branch rules, and fork workflow for Silverstripe CMS major version upgrades |
@@ -40,7 +40,7 @@ npx skills add jsirish/workflow-skills --skill '*' -a claude-code -g
 ### Install specific skills
 
 ```bash
-npx skills add jsirish/workflow-skills --skill onboard --skill handoff -a claude-code -g
+npx skills add jsirish/workflow-skills --skill pr-review --skill merge-pr -a claude-code -g
 ```
 
 ### Install for multiple agents
@@ -73,8 +73,6 @@ npx skills list -g
 
 Once installed, skills activate automatically based on your request. For example:
 
-- *"onboard me on this project"* → `onboard`
-- *"update the handoff"* → `handoff`
 - *"review this PR"* → `pr-review`
 - *"merge the approved PR"* or *"merge MR !75"* → `merge-pr`
 - *"ddev sync"* or *"sync remote database"* → `ddev-sync`
