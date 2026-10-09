@@ -52,6 +52,14 @@
 # Exit code: non-zero if any check FAILed (only possible by default via a
 # broken-config error above; otherwise only under --strict/-build/-lint).
 
+# This script is written for bash. In particular run() splices the unquoted DDEV
+# prefix ("ddev exec ...") and relies on it splitting into words, which zsh does
+# not do, so `zsh local-ci.sh` died with "command not found: ddev exec" on the
+# dev/build and phpcbf steps. Re-run under bash when started from zsh.
+if [ -n "${ZSH_VERSION:-}" ]; then
+  exec bash "$0" "$@"
+fi
+
 set -uo pipefail
 
 # ----- options -----------------------------------------------------------
