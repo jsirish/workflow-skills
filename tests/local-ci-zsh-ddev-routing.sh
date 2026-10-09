@@ -34,6 +34,10 @@ cleanup() { for d in "${TMP_DIRS[@]:-}"; do [ -n "$d" ] && rm -rf "$d"; done; }
 trap cleanup EXIT
 
 if ! command -v zsh >/dev/null 2>&1; then
+  if [ -n "${CI:-}" ]; then
+    echo "FAIL: zsh not found and CI is set - the zsh regression would go unrun" >&2
+    exit 1
+  fi
   skip "zsh not found on this host - cannot exercise the zsh invocation path"
   exit 0
 fi
@@ -77,6 +81,46 @@ for sh in bash zsh; do
     fail "$sh: dev/build never reached ddev. ddev saw: $(tr '\n' ';' < "$LOG")"
   fi
 done
+
+# Run a command with a hard time limit enforced from outside (a re-exec loop
+# keeps one PID and ignores an in-process alarm, so the test must kill it).
+# Output goes to $BOUNDED_OUT; the return code is 124 on timeout.
+run_bounded() {
+  local limit="$1"; shift
+  BOUNDED_OUT="$base/bounded.out"
+  : > "$BOUNDED_OUT"
+  "$@" >"$BOUNDED_OUT" 2>&1 &
+  local pid=$! i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$i" -ge $((limit * 5)) ]; then
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 0.2
+    i=$((i + 1))
+  done
+  wait "$pid"
+}
+
+# The re-exec guard must not loop when bash itself inherits ZSH_VERSION from
+# its environment (a parent shell or dotfile can export it).
+ZSH_VERSION=5.9 run_bounded 20 bash "$LOCAL_CI" --help
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  pass "bash with an inherited ZSH_VERSION does not re-exec in a loop"
+else
+  fail "bash with an inherited ZSH_VERSION did not finish cleanly (rc=$rc; 124 means it was still looping after 20s)"
+fi
+
+# Sourcing from zsh must not replace the caller's shell with bash.
+run_bounded 20 zsh -c "source '$LOCAL_CI' --help; echo AFTER-SOURCE"
+out="$(cat "$BOUNDED_OUT")"
+if printf '%s' "$out" | /usr/bin/grep -q 'AFTER-SOURCE' && printf '%s' "$out" | /usr/bin/grep -q 'run it with bash'; then
+  pass "sourcing from zsh reports the problem and leaves the caller's shell alive"
+else
+  fail "sourcing from zsh replaced or crashed the caller's shell. Output: $out"
+fi
 
 if [ "$FAILURES" -eq 0 ]; then
   echo "All checks passed."
