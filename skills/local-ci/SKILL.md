@@ -1,6 +1,6 @@
 ---
 name: local-ci
-description: Run the project's test/lint checks locally (PHPUnit, PHPCS, PHPStan, npm, ruff/pytest, shellcheck, .local-ci.json) and report PASS/WARN/FAIL. Use for "run ci", "run the tests", "run local ci", "run the checks", "check before opening a PR", "does it pass", or verifying before merge.
+description: Run the project's test/lint checks locally (PHPUnit, PHPCS, PHPStan, npm, ruff/pytest, shellcheck, .local-ci.json) and report PASS/WARN/FAIL. Use for "run local CI", "run the checks before a PR", "run ci", "check before opening a PR", "run the tests", "does it pass", or verifying before merge.
 ---
 
 # Local CI
