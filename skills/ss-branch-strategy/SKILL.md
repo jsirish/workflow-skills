@@ -60,8 +60,8 @@ Prerequisites (per repo):
    `gh api -X PATCH repos/<owner>/<repo> -F allow_auto_merge=true`
 2. **Branch protection on the integer default branch** with at least one requirement (a
    required status check or required review). Without a protection rule, `--auto` errors and
-   you must use a plain `gh pr merge --squash` instead. The `merge-pr` skill already resolves
-   the default branch dynamically, so plain squash-merge works against `6`/`5`/`3` today.
+   you must use a plain `gh pr merge` instead, with the repo's merge strategy. The `merge-pr` skill already resolves
+   the default branch and strategy dynamically, so it works against `6`/`5`/`3` today.
 
 ---
 
@@ -109,7 +109,7 @@ Recipe/module repos version against the **recipe** number, not the CMS number:
 | silverstripe-elemental-sponsors | `5` (default) | `master` | |
 | silverstripe-elemental-templates | `3` (default) | `2` | |
 
-`master` in the SS5 column means that repo has not yet moved its SS5 line to a numbered branch. `master` is a legacy name for that line only; the SS6 branch is always the numbered default.
+`master` in the SS5 column means that repo has not yet moved its SS5 line to a numbered branch. `master` is a legacy name for that line only; the SS6 line always lives on a numbered branch, which should be the default.
 
 ### Example repo: `dynamic/silverstripe-elemental-accordion`
 

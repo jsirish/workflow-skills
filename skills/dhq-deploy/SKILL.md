@@ -122,6 +122,8 @@ deploy` explicitly from a CI step instead, e.g. a GitHub Actions step on push to
 
 DeployHQ runs any SSH commands configured on the server (e.g. `composer install`, `sake dev/build`, OPcache flush) automatically after the file transfer. No manual post-deploy steps are needed unless something is not in the server's SSH command list.
 
+Before deploying, check for unpushed commits (`git log origin/<branch>..<branch> --oneline` must be empty; DeployHQ deploys from the git remote). For the `composer install` stale-vendor, de-tracked-file deletion and Ploi database-host caveats, see [`server-deploy`](../server-deploy/SKILL.md#deployhq--ploi-caveats).
+
 ## Troubleshooting
 
 | Symptom | Fix |

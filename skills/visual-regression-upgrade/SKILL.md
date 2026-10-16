@@ -1,6 +1,6 @@
 ---
 name: visual-regression-upgrade
-description: Pixel-diff two environments (prod vs UAT, or local legacy vs upgrade) via Playwright screenshots and an HTML PASS/WARN/FAIL report. Use for "does it look the same", "compare prod and UAT", "screenshot diff", "visual regression", or checking a CMS major upgrade didn't break the front-end.
+description: Pixel-diff two environments (prod vs UAT, or local legacy vs upgrade) with Playwright screenshots and an HTML report. Use for "does it look the same", "did the layout change", "compare prod and UAT", "screenshot diff", or checking a CMS upgrade (SS 4→5, Drupal, WordPress) broke the front-end.
 ---
 
 # Visual Regression for CMS Upgrades

@@ -86,6 +86,7 @@ glab mr merge <mr-number> [--squash] --remove-source-branch --yes
 ```
 
 -   **Commit Message (when squashing):** Synthesize a clean, descriptive subject using conventional commits (e.g., `feat: PR title`). If the PR description contains important details, include them in the commit body.
+-   `--subject` / `--body` apply to `--squash` and `--merge` only; drop them for `--rebase`.
 -   `--delete-branch` (gh) / `--remove-source-branch` (glab) handles the remote branch cleanup on the source repository.
 
 ---
