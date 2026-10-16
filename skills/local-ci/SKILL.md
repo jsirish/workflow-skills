@@ -1,13 +1,13 @@
 ---
 name: local-ci
-description: Run the executable test/lint layer locally — PHPUnit, PHPCS, PHPStan, npm lint/build/test, Python ruff/pytest, shellcheck, and project-declared custom checks (.local-ci.json) — auto-fixing where a fixer exists, then reporting pass/fail. Augments LLM code review (/code-review, pr-review-toolkit), which never actually runs tests. USE THIS SKILL when asked to "run ci", "run the tests", "run local ci", "check before opening a PR", "run the checks", "does it pass", or to verify a change before review/merge. Replaces per-project tests.sh scripts. Self-contained — bundles scripts/local-ci.sh.
+description: Run the project's real test/lint checks locally (PHPUnit, PHPCS, PHPStan, npm, ruff/pytest, shellcheck, .local-ci.json) and report pass/fail. Use for "run ci", "run the tests", "run local ci", "run the checks", "check before opening a PR", "does it pass", or verifying a change before review/merge.
 ---
 
 # Local CI
 
 LLM review (`/code-review`, `pr-review-toolkit`) reasons about code but **never executes a test suite**. This skill fills that gap: it detects which check configs a project has and runs the matching checks, the same canonical set `silverstripe/gha-ci` runs in CI — PHPUnit, PHPCS, PHPStan, the npm scripts, and (for Python) ruff + pytest. It also covers shell projects that have adopted shellcheck (via `.shellcheckrc`) and, via a project-committed `.local-ci.json`, any custom entrypoint a project's real CI actually runs.
 
-It is the executable counterpart to review, not a replacement. Run it, then feed the summary into the review.
+It is the executable counterpart to review, not a replacement. Run it, then feed the summary into the review. It auto-fixes where a fixer exists (phpcbf, eslint --fix, ruff --fix), then reports pass/fail. It replaces per-project `tests.sh` scripts and is self-contained: it bundles `scripts/local-ci.sh`.
 
 ## When to use
 
