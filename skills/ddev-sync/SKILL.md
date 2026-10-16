@@ -126,8 +126,7 @@ ls .agent/skills/ 2>/dev/null              # project-specific skill
 
 If none exists, consult your framework's migration documentation and formalize a
 project-specific runbook (strongly recommended — each project's task list differs).
-For SilverStripe, see the `ss5-data-migration` / `silverstripe-3-to-4-upgrade` /
-`ss6-data-migration` skills.
+For SilverStripe, see the `ss-data-migration` / `silverstripe-3-to-4-upgrade` skills.
 
 Do NOT assume the site is ready just because pages render — many frameworks have
 lazy-migration patterns where pages resolve but relational data is still unmigrated.
