@@ -6,7 +6,7 @@ description: Request and manage pull request reviews using pr-agent (local CLI) 
 # PR Review
 
 Primary reviewer: `pr-agent` (Qodo Merge), installed locally via pipx.
-Optional second-pass for code PRs: `code-review:code-review` skill (Claude-based).
+Optional Claude second-pass for code PRs: `pr-review-toolkit:review-pr` (model-invocable). `code-review:code-review` is user-invocable only, so Claude cannot call it; the user can type `/code-review` themselves.
 
 ## Environment
 
@@ -31,7 +31,7 @@ Project-level config lives in `.pr_agent.toml` (if present).
 
 All commands write to the PR under the user's GitHub identity. Confirm before running `review`, `improve`, or `describe` (which rewrites the PR title and body) on a PR the user didn't author.
 
-In an interactive terminal the env block is already loaded, so just call `pr-agent`. Non-interactive callers (e.g. an agent's shell tool) that don't load your rc should prepend `source ~/.zshrc;`.
+In an interactive terminal the env block is already loaded, so just call `pr-agent`. Non-interactive callers (e.g. an agent's shell tool) that don't load your rc should load the env block first, for example by prepending `source ~/.zshrc;` to the command.
 
 ```sh
 # Review — posts a top-level review comment (correctness, security, completeness)
@@ -52,27 +52,23 @@ pr-agent --pr_url <pr-url> ask "<question>"
 1. **Identify the PR**: `gh pr view <number>` to confirm scope, then grab the URL.
 2. **Request pr-agent review**:
    ```sh
-   source ~/.zshrc; pr-agent --pr_url <pr-url> review
+   pr-agent --pr_url <pr-url> review
    ```
-   For inline suggestions, also run `improve`. (Env vars from [Environment](#environment) must be loaded; the `source` covers non-interactive shells.)
-3. **Optional Claude second-pass** (code PRs): invoke `code-review:code-review`. Useful for a second-model perspective — pr-agent uses a different model by default, so Claude catches different patterns.
-4. **Read the posted feedback**:
-   ```sh
-   gh pr view <number> --json reviews
-   gh api repos/OWNER/REPO/pulls/<number>/comments
-   ```
+   For inline suggestions, also run `improve`. The [Environment](#environment) vars must be loaded (see the non-interactive note under [Commands](#commands)).
+3. **Optional Claude second-pass** (code PRs): invoke `pr-review-toolkit:review-pr`. Useful for a second-model perspective — pr-agent uses a different model by default, so Claude catches different patterns.
+4. **Read the posted feedback** with the commands under [Checking Review Status](#checking-review-status).
 5. **Address feedback** — fix code, commit, push.
 6. **Reply to each thread** explaining what was fixed:
    ```sh
    gh api repos/OWNER/REPO/pulls/<PR_NUMBER>/comments/<COMMENT_ID>/replies \
      -X POST -f body="Fixed in <commit-sha>"
    ```
-7. **Re-review** — repeat from step 2. Aim for **at least 3 rounds** when the reviewer is providing legitimate feedback. Stop only when two consecutive rounds produce no new actionable comments.
+7. **Re-review** — repeat from step 2. Stop when a round produces no new actionable comments after the previous round's fixes landed. Keep going while rounds surface real findings.
 
 ### Round count guidance
 
-- **< 3 rounds**: only acceptable when the very first review finds nothing actionable (clean pass). If any round surfaces real findings, keep going.
-- **3 rounds**: default target. Covers the common pattern of a fix introducing a new edge case the reviewer catches on re-pass.
+- **1 round**: enough only when the first review finds nothing actionable.
+- **2-3 rounds**: typical. A fix can introduce a new edge case the reviewer catches on re-pass, so the round after the last fix must come back clean.
 - **4+ rounds**: expected for security issues, logic bugs, or when an earlier skip was later reversed.
 
 ### Deciding What to Address
@@ -103,5 +99,5 @@ gh api repos/OWNER/REPO/pulls/<number>/comments \
 
 - pr-agent is a **local CLI only** — there is no GitHub Action workflow firing on push.
 - Install via `pipx install pr-agent`. **Do not edit the bundled `.secrets.toml` inside the pipx venv** — `pipx upgrade`/`reinstall` rebuilds the venv and wipes it. Configure via the env vars above instead (they live outside the venv and survive upgrades).
-- **There is no user-global config file for the CLI** (no `~/.pr_agent.toml`). pr-agent loads settings only from package-internal paths and actively blocks dynaconf's include/external-file mechanisms. The "global configuration" in the docs is the org-level `pr-agent-settings` GitHub repo, which applies only to the hosted GitHub App — not the CLI. Environment variables are the only global mechanism.
-- Project-specific guidance for pr-agent (when relevant) lives in the project's `.claude/CLAUDE.md` or `.agent/pr-agent.md`.
+- **There is no user-global config file for the CLI** (no `~/.pr_agent.toml`). The org-level `pr-agent-settings` repo in the docs applies only to the hosted GitHub App. Environment variables are the only global mechanism.
+- Project-specific guidance for pr-agent goes in the project's `.pr_agent.toml` (for example `extra_instructions`).

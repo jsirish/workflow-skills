@@ -1,11 +1,13 @@
 ---
 name: server-deploy
-description: Push local databases and assets to a remote pre-prod or staging server using deploy.sh. Use during major version upgrades or when deploying pre-computed public/assets to a staging environment. See server-sync for the reverse direction.
+description: Push a local DDEV database and assets to a remote pre-prod/staging server with the project's deploy.sh. Use for "push local DB to pre-prod", "deploy assets to staging", "content push". Destructive. Pulls are server-sync; code deploys are dhq-deploy.
 ---
 
 # Server Deploy — Push Local → Remote
 
 Pushes local content state (database and assets) from a DDEV environment up to a remote pre-prod or staging server using `deploy.sh`.
+
+`deploy.sh` is a **project-local script** in the project root; this skill does not ship it. If the project has none, stop and ask rather than writing one. For code deploys (as opposed to content pushes) use [`dhq-deploy`](../dhq-deploy/SKILL.md).
 
 > [!WARNING]
 > `deploy.sh` is highly destructive. It will **drop and overwrite** the remote database and assets. Always confirm the destination environment before running.
@@ -46,18 +48,14 @@ PREPROD_DB_HOST="localhost"
 *Local execution relies on the application's database environment variables (`SS_DATABASE_NAME`, `SS_DATABASE_SERVER` for SilverStripe; adapt to your framework's equivalents).*
 
 > [!CAUTION]
-> **`REMOTE_*` and `PREPROD_*` must point at DIFFERENT hosts.** [`sync.sh`](../server-sync/SKILL.md) reads `REMOTE_*` (pull FROM). `deploy.sh` reads `PREPROD_*` (push TO). If both vars resolve to the same host, you pull from pre-prod *and* deploy to pre-prod — production is never touched. Always verify before migration work:
-> ```bash
-> grep -E "REMOTE_HOST|PREPROD_HOST" .env    # must be two DIFFERENT hosts
-> grep "^PREPROD_" deploy.sh                # deploy.sh must read PREPROD_*
-> ```
+> **`REMOTE_*` and `PREPROD_*` must point at DIFFERENT hosts.** `deploy.sh` reads `PREPROD_*` (push TO); [`sync.sh`](../server-sync/SKILL.md) reads `REMOTE_*` (pull FROM). Run the host check in [server-sync](../server-sync/SKILL.md#environment-configuration-env), plus `grep "^PREPROD_" deploy.sh` to confirm this script reads `PREPROD_*`.
 
 ## Command Flags
 
 | Flag | Description |
 |------|-------------|
 | `--help` | Shows usage information |
-| `--dry-run` | Tests the `rsync` without writing to the remote disk or executing the remote DB import. **Note:** the local DB dump and remote push *are* executed even in dry-run mode — only the remote import/restore is skipped. See the [dry-run caution](#dry-run-caution) below. Always recommend running `--dry-run` first. |
+| `--dry-run` | Tests the `rsync` without writing to the remote disk or executing the remote DB import. **Note:** the local DB dump and remote push *are* executed even in dry-run mode — only the remote import/restore is skipped. Read the [dry-run caution](#dry-run-caution) first. For a preview with no database exposure, use `--assets --dry-run`. |
 | `--assets` | Bypasses the database phase. Only syncs `public/assets/`. |
 | `--db` | Bypasses the asset rsync phase. Only dumps and imports the database. |
 | `--exclude=PATTERN` | Exclude specific files or globs from the `rsync` cycle (repeat for multiple patterns). Example: `--exclude=*.log --exclude=_resampled/` |
@@ -72,6 +70,8 @@ PREPROD_DB_HOST="localhost"
 > Run heavy local computation (e.g. `GalleryResampleTask`) **before** `deploy.sh --assets` to offload processing burden from the remote VPS.
 
 ## Dry-Run Caution
+
+A `--db` dry run still writes a full DB dump locally and copies it to the remote `/tmp`. Run it only against a target you are cleared to hold that data, and confirm the dumps are removed afterward.
 
 > [!WARNING]
 > **`--dry-run` creates — and, if cleanup is gated incorrectly, leaves — DB dumps that are never removed.** `deploy.sh` produces **two** dumps during a push: a local staging dump and a copy pushed to the remote `/tmp`. If cleanup is gated on `!dry-run`, every `--dry-run` silently accumulates both dumps — a data-at-rest exposure on both the local host and the remote server.
@@ -88,7 +88,7 @@ PREPROD_DB_HOST="localhost"
 
 ## DeployHQ / Ploi Caveats
 
-`deploy.sh` moves data; the actual code deploy is usually handled by **DeployHQ** (build + SSH) onto a **Ploi**-managed server. These behaviours are not obvious from the scripts.
+`deploy.sh` moves data; the actual code deploy is usually handled by **DeployHQ** (see [`dhq-deploy`](../dhq-deploy/SKILL.md)) onto a **Ploi**-managed server. These behaviours are not obvious from the scripts.
 
 > [!CAUTION]
 > **DeployHQ deploys from the git remote, not your working copy — check for unpushed commits first.**

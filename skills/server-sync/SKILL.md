@@ -1,11 +1,13 @@
 ---
 name: server-sync
-description: Pull databases and assets from a remote server to the local DDEV environment using sync.sh. Use when onboarding to a project, grabbing fresh production data to test locally, or refreshing local state before beginning upgrade work. See server-deploy for the reverse direction.
+description: Reference and safety checklist for the project's sync.sh, which pulls a remote DB and assets into local DDEV. Use for "pull prod data locally", "sync.sh fails", "REMOTE_* env", dry-run safety. For the full refresh workflow use ddev-sync. The reverse direction is server-deploy.
 ---
 
 # Server Sync — Pull Remote → Local
 
 Pulls the remote content state (database and assets) down to a local DDEV environment using `sync.sh`.
+
+`sync.sh` is a **project-local script** in the project root; this skill does not ship it. If the project has none, stop and ask rather than writing one.
 
 > **Note on "production":** `sync.sh` pulls from the *authoritative content source* — typically production, but may be a pre-prod server during pre-launch phases. The `.env` `REMOTE_*` vars always point to whichever environment holds the master content.
 
@@ -49,7 +51,7 @@ REMOTE_DB_HOST="localhost"
 ```
 
 > [!CAUTION]
-> **`REMOTE_*` and `PREPROD_*` must point at DIFFERENT hosts.** `sync.sh` reads `REMOTE_*` (pull FROM). [`deploy.sh`](../server-deploy/SKILL.md) reads `PREPROD_*` (push TO). If both vars resolve to the same host, you pull from pre-prod *and* deploy to pre-prod — production is never touched. Always verify before migration work:
+> **`REMOTE_*` and `PREPROD_*` must point at DIFFERENT hosts** (this is the canonical copy; [`server-deploy`](../server-deploy/SKILL.md) and [`ddev-sync`](../ddev-sync/SKILL.md) point here). `sync.sh` reads `REMOTE_*` (pull FROM). [`deploy.sh`](../server-deploy/SKILL.md) reads `PREPROD_*` (push TO). If both vars resolve to the same host, you pull from pre-prod *and* deploy to pre-prod — production is never touched. Always verify before migration work:
 > ```bash
 > grep -E "REMOTE_HOST|PREPROD_HOST" .env    # must be two DIFFERENT hosts
 > grep "^REMOTE_" sync.sh                   # sync.sh must read REMOTE_*

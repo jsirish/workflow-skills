@@ -1,21 +1,37 @@
 ---
 name: ddev-legacy-php
-description: Enable EOL PHP versions (5.6–7.4) in DDEV v1.24+ on Apple Silicon (ARM64)
+description: Run end-of-life PHP (5.6-8.0) in DDEV v1.24+, where those versions are no longer in the web image. Use for "php7.4 not found in ddev", "legacy PHP in DDEV", "old PHP version for a legacy site", `ddev exec php7.4 -v` failing, or install_php_extensions.sh errors on Apple Silicon.
 ---
 
 # DDEV Legacy PHP Setup
 
-## Problem
+DDEV v1.24.0+ no longer ships PHP 5.6, 7.0, 7.1, 7.2, 7.3, 7.4, or 8.0 in the web image ([ddev/ddev#6835](https://github.com/ddev/ddev/issues/6835)). DDEV installs them at image-build time with `install_php_extensions.sh`.
 
-DDEV v1.24+ removed end-of-life PHP versions (5.6, 7.0, 7.1, 7.2, 7.3, 7.4) from the default web container images. On Apple Silicon (ARM64) Macs, these versions also lack native ARM64 packages in the Ondřej Surý PPA, so even the built-in `install_php_extensions.sh` script will fail with `Unable to locate package` errors.
+## Case 1: the project runs the legacy version
 
-## Solution
+Set the version and restart. DDEV injects the install step into the web build itself, so no Dockerfile is needed:
 
-Two files are needed in the project's `.ddev/` directory:
+```bash
+ddev config --php-version=7.4
+ddev restart
+ddev exec php -v
+```
 
-### 1. Force amd64 emulation
+The first build takes several minutes.
 
-Create `.ddev/docker-compose.amd64.yaml`:
+## Case 2: legacy version alongside a newer default
+
+To keep, say, PHP 8.3 as the default and also run 7.4 for specific scripts, create `.ddev/web-build/pre.Dockerfile.php7.4`:
+
+```dockerfile
+RUN /usr/local/bin/install_php_extensions.sh "php7.4" "${TARGETARCH}"
+```
+
+Replace `php7.4` with the version needed (e.g. `php7.2`, `php5.6`). After `ddev restart`, run it with `ddev exec php7.4 -v`.
+
+## Fallback: force amd64 on Apple Silicon
+
+If the native ARM64 build fails for a specific version, run the web container under x86_64 emulation. Create `.ddev/docker-compose.amd64.yaml`:
 
 ```yaml
 services:
@@ -23,54 +39,17 @@ services:
     platform: linux/amd64
 ```
 
-This forces the web container to run under Rosetta/QEMU x86_64 emulation, giving access to the full x86 PHP package ecosystem.
+Then `ddev restart` (the first build pulls amd64 images and is slow). Emulation makes PHP execution slower; the database and router stay native. Remove the file as soon as the native build works or the project moves to a supported PHP.
 
-### 2. Install the legacy PHP version
+## When to remove
 
-Create `.ddev/web-build/Dockerfile` (or append to it if one already exists):
+When the project upgrades to a supported PHP version:
 
-```dockerfile
-RUN /usr/local/bin/install_php_extensions.sh "php7.4" "${TARGETARCH}"
-```
-
-Replace `php7.4` with whichever legacy version is needed (e.g. `php7.2`, `php5.6`).
-
-### 3. Restart DDEV
-
-```bash
-ddev restart
-```
-
-The first build will take several minutes as it pulls amd64 images. Verify with:
-
-```bash
-ddev exec php -v
-```
-
-## Steps to Apply
-
-1. Check the project's `.ddev/config.yaml` for `php_version` — confirm it specifies the legacy version.
-2. Create `.ddev/docker-compose.amd64.yaml` with the platform override shown above.
-3. Create or append to `.ddev/web-build/Dockerfile` with the `install_php_extensions.sh` line, substituting the correct PHP version.
-4. Run `ddev restart` and wait for the container build to complete.
-5. Verify with `ddev exec php -v`.
-
-## Tradeoffs
-
-- **Performance**: Expect ~20–50% slower execution due to x86 emulation via Rosetta. Native ARM64 services (database, router) are unaffected.
-- **Long-term**: This is a stopgap. Upgrading the codebase to PHP 8.1+ is the recommended path — at that point, delete both files to return to native ARM64 performance.
-
-## When to Remove
-
-When the project upgrades to a supported PHP version (8.1+):
-
-1. Delete `.ddev/docker-compose.amd64.yaml`
-2. Delete `.ddev/web-build/Dockerfile` (or remove the `install_php_extensions.sh` line)
-3. Update `php_version` in `.ddev/config.yaml`
-4. Run `ddev restart`
+1. Delete `.ddev/docker-compose.amd64.yaml` and any `pre.Dockerfile.phpX.Y` added above.
+2. Update `php_version` in `.ddev/config.yaml` (or run `ddev config --php-version=<new>`).
+3. Run `ddev restart`.
 
 ## Reference
 
+- [DDEV Docs: Adding EOL Versions of PHP](https://docs.ddev.com/en/stable/users/extend/customizing-images/#adding-eol-versions-of-php)
 - [DDEV Blog: AMD64 with Rosetta on macOS](https://ddev.com/blog/amd64-with-rosetta-on-macos/)
-- [DDEV GitHub Issue #6835](https://github.com/ddev/ddev/issues/6835)
-- [DDEV Docs: Customizing Images](https://docs.ddev.com/en/stable/users/extend/customizing-images/)

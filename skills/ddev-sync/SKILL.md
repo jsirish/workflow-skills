@@ -90,8 +90,8 @@ Verify the following before proceeding:
 > [!IMPORTANT]
 > Confirm `sync.sh` pulls from the **authoritative content source** (typically production; pre-prod during pre-launch):
 > `grep REMOTE_HOST .env` — should be the environment that holds master content.
-> `REMOTE_*` = authoritative source (sync FROM); `PREPROD_*` = target environment (deploy TO). If both
-> sets point at the same host, you are syncing from the wrong environment.
+> `REMOTE_*` must differ from `PREPROD_*`; see the host check in
+> [`server-sync`](../server-sync/SKILL.md#environment-configuration-env).
 
 5. **Sync remote database and assets** (will prompt for confirmation — answer `Y`):
    ```bash

@@ -1,13 +1,13 @@
 ---
 name: dhq-deploy
-description: Deploy a project to production using the DeployHQ CLI (dhq). Use when asked to deploy, trigger a deployment, or ship code via DeployHQ.
+description: Deploy code with the DeployHQ CLI (dhq), and diagnose pushes that don't deploy (auto-deploy, webhook). Use for "deploy to production", "trigger a deployment", "ship via DeployHQ", "push didn't deploy", "dhq 404". Not for DB/asset pushes (server-deploy).
 ---
 
 # DeployHQ CLI Deployment
 
 ## Prerequisites
 
-- `dhq` CLI installed and authenticated (`dhq auth` / `dhq doctor`)
+- `dhq` CLI installed and authenticated (`dhq auth status` / `dhq doctor`)
 - Know the **project permalink** — the short slug visible in the DeployHQ URL, e.g. `my-project`. This is NOT the UUID.
 
 ## Critical: permalink vs UUID
@@ -32,7 +32,7 @@ dhq servers list -p <permalink>
 dhq deploy --wait
 ```
 
-`--wait` streams the deployment log in real time and exits non-zero on failure.
+`--wait` streams the deployment log until it completes or fails. It cannot be combined with `--dry-run`. Confirm the final status with `dhq deployments show` (below) rather than relying on the exit code.
 
 ### Explicit: specific project, server, and revision
 
@@ -61,6 +61,7 @@ dhq deployments watch <deployment-id> -p <permalink>
 | `--project` | `-p` | Project permalink |
 | `--server` | `-s` | Server or group identifier |
 | `--revision` | `-r` | End revision (default: latest) |
+| `--start-revision` | | Start revision (default: the server's last deployed commit) |
 | `--branch` | `-b` | Branch to deploy |
 | `--wait` | `-w` | Stream log and block until done |
 | `--dry-run` | | Preview only, no deployment created |
@@ -69,7 +70,7 @@ dhq deployments watch <deployment-id> -p <permalink>
 
 ## Check result and duration
 
-`--wait` exits non-zero on failure and prints final status inline. To inspect duration or retrieve the deployment ID for further commands:
+To inspect status and duration, or retrieve the deployment ID for further commands:
 
 ```bash
 # Most recent deployments with status and duration
@@ -129,4 +130,4 @@ DeployHQ runs any SSH commands configured on the server (e.g. `composer install`
 | No servers found | Run `dhq servers list -p <permalink>` to confirm identifiers. |
 | Deploy queued but not running | Check for a running deployment: `dhq deployments list -p <permalink>`. DeployHQ queues if one is already in progress. |
 | Pushed to a branch, no deployment appeared at all | Distinct from the row above — no deploy was ever queued. Run `dhq auto-deploys list -p <permalink>` to confirm the target server has `auto_deploy: true` for the branch pushed to (a mismatched `preferred_branch` silently means no trigger). If auto-deploy is correctly enabled, the repo's webhook to DeployHQ's `webhook_url` may not be configured or firing — check the git host's webhook delivery log (repo Settings → Webhooks) for a failed or missing delivery. |
-| Auth failure | Run `dhq doctor` to verify credentials and connectivity. |
+| Auth failure | Run `dhq auth status`, then `dhq doctor` to verify credentials and connectivity. |
