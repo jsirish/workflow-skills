@@ -1,6 +1,6 @@
 ---
 name: visual-regression-upgrade
-description: Verify visual parity between two web environments (production vs upgraded/UAT) by capturing full-page screenshots of matching URLs and producing a pixel-diff HTML report. USE THIS SKILL whenever an agent needs to answer "does it look the same", "check the upgrade visually", "compare prod and UAT", "did the layout change", "screenshot diff", "visual regression", or verify a CMS major-version upgrade (SilverStripe 4→5, Drupal 9→10, WordPress major bumps) hasn't broken the front-end. Self-contained — bundles a Playwright capture script, URL crawler, and pixel-diff report generator.
+description: Pixel-diff two environments (prod vs UAT, or local legacy vs upgrade) with Playwright screenshots and an HTML report. Use for "does it look the same", "did the layout change", "compare prod and UAT", "screenshot diff", or checking a CMS upgrade (SS 4→5, Drupal, WordPress) broke the front-end.
 ---
 
 # Visual Regression for CMS Upgrades
@@ -80,7 +80,7 @@ python scripts/capture.py \
   --paths-file paths.txt --wait 2.0 --insecure --out ./vr-legacy
 ```
 
-**Acceptance bar (same-machine):** every page PASS or WARN < 2%. Any FAIL, and any WARN > 2%, is a genuine regression worth investigating — not noise. (Field evidence: this mode isolated a 25px blog-card height delta from `LimitWordCount` vs `Summary()` truncation, and a contact-form field-spacing change — both invisible under cross-server font noise.)
+**Acceptance bar (same-machine):** every page PASS or WARN < 2%. Any FAIL, and any WARN > 2%, is a genuine regression worth investigating — not noise. The report does not enforce the 2% bar: it classifies with the fixed bands in Step 4, so read each page's `diff_pct` in `results.json` or the report table.
 
 Mask domain-restricted widgets that can't render locally — e.g. a Google static map whose API key is locked to the prod domain renders a "domain not authorized" placeholder on *both* locals, so it must be masked, not chased:
 
@@ -130,7 +130,7 @@ Produces:
 | 0.5 – 5% | **WARN** (amber) | Likely a real but minor change — inspect (margin shift, image swap, color tweak) |
 | > 5% | **FAIL** (red) | Significant regression — investigate before signing off |
 
-These bands are calibrated for **cross-server** captures, where sub-pixel font/CDN variance puts a noise floor under every page. For **same-machine** captures (local legacy vs local upgrade) that floor is gone — treat anything **> 2% as actionable** and expect clean pages to sit well under 0.5%.
+These bands are fixed in `scripts/diff_report.py` (`PASS_THRESHOLD`, `WARN_THRESHOLD`) and there is no flag to change them. They are calibrated for **cross-server** captures, where sub-pixel font/CDN variance puts a noise floor under every page. For **same-machine** captures (local legacy vs local upgrade) that floor is gone — treat anything **> 2% as actionable** (read it from `diff_pct`; the report still labels 0.5-5% WARN) and expect clean pages to sit well under 0.5%.
 
 Tune masks and re-run if WARN/FAIL pages are all caused by the same dynamic widget.
 

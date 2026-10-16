@@ -17,7 +17,7 @@ Tips for using this skill against SilverStripe sites, especially during major-ve
 ## Auth paths
 
 - `/admin`, `/Security/login`, `/dev/build` need authentication.
-- **HTTP basic auth** at the web-server level (often used to gate UAT) → use `--auth user:pass`.
+- **HTTP basic auth** at the web-server level (often used to gate UAT) → use `--auth env:VR_AUTH` (or `prompt`); a literal `user:pass` works but is visible in argv. Scope it with `--local-auth` when only UAT is protected.
 - **CMS login** (form-based) → log in via a real browser, export cookies, save as `cookies.json`, pass `--cookies cookies.json`.
 - The CMS admin is rarely worth screenshot-diffing; exclude it from `paths.txt` unless you're explicitly testing the CMS UI.
 
@@ -120,7 +120,7 @@ This grays out the image portion of two-column PageSection blocks while preservi
 If masked pages still show 5–15% FAIL, the remaining diff is almost always **text content drift** — editors updated copy, statistics, or dates on prod since the last DB sync. This is expected and does not indicate a structural regression. Remedies:
 
 1. **Re-sync prod DB** immediately before capturing — removes content drift entirely.
-2. **Accept the threshold** — bump `diff_pct` FAIL threshold to 15% when content-only drift is known.
+2. **Accept the drift** — the report's FAIL band (> 5%) is fixed in `scripts/diff_report.py` and has no flag. When content-only drift is known, review each FAIL page's diff image and record in the sign-off which pages are accepted as copy drift.
 3. **Mask text-heavy blocks** — add selectors for specific blocks (`[class*="typography"]`, `.main-content`) if you want a pure-layout diff. Not recommended for ongoing regression detection.
 
 ## SS_BASE_URL traps

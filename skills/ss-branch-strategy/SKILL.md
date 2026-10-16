@@ -1,6 +1,6 @@
 ---
 name: ss-branch-strategy
-description: Establish consistent branch-naming and default-branch conventions across all module repos when executing a major framework or CMS version upgrade. Covers integer branch naming, default-branch promotion, previous-version preservation, and the fork-and-upstream workflow for third-party modules. Use when planning or executing a major version upgrade across a suite of repos.
+description: Branch naming and default-branch rules for a major framework/CMS upgrade across module repos (integer branches, default promotion, keeping the previous major, forking 3rd-party modules). Use for "which branch for SS6", "set the default branch", "cut the 6 branch", or planning a suite-wide upgrade.
 ---
 
 # Major-Version Branch Strategy
@@ -60,8 +60,8 @@ Prerequisites (per repo):
    `gh api -X PATCH repos/<owner>/<repo> -F allow_auto_merge=true`
 2. **Branch protection on the integer default branch** with at least one requirement (a
    required status check or required review). Without a protection rule, `--auto` errors and
-   you must use a plain `gh pr merge --squash` instead. The `merge-pr` skill already resolves
-   the default branch dynamically, so plain squash-merge works against `6`/`5`/`3` today.
+   you must use a plain `gh pr merge` instead, with the repo's merge strategy. The `merge-pr` skill already resolves
+   the default branch and strategy dynamically, so it works against `6`/`5`/`3` today.
 
 ---
 
@@ -80,7 +80,7 @@ Prerequisites (per repo):
 
 ## Checklist
 
-- [ ] Default branch is an integer matching the ecosystem/recipe major (not `master`, not the module's own semver)
+- [ ] Default branch is an integer matching what the repo versions against (the framework major or the shared recipe number, per Branch Naming), not `master` and not a minor/patch version
 - [ ] Any active content on `master` migrated to a numbered branch; `master` left in place for history
 - [ ] Previous major's branch retained for backports
 - [ ] No stray long-lived `N.x` branches for unsupported versions
@@ -109,6 +109,8 @@ Recipe/module repos version against the **recipe** number, not the CMS number:
 | silverstripe-elemental-sponsors | `5` (default) | `master` | |
 | silverstripe-elemental-templates | `3` (default) | `2` | |
 
+`master` in the SS5 column means that repo has not yet moved its SS5 line to a numbered branch. `master` is a legacy name for that line only; the SS6 line always lives on a numbered branch, which should be the default.
+
 ### Example repo: `dynamic/silverstripe-elemental-accordion`
 
 | Branch | CMS Version | Status |
@@ -118,11 +120,10 @@ Recipe/module repos version against the **recipe** number, not the CMS number:
 
 ### Silverstripe fork workflow
 
-1. Fork the upstream repo into the `dynamic/` GitHub org, keeping the `silverstripe-` prefix.
-2. Create a `feature/ss6-upgrade` branch with the dependency bumps.
-3. Push and open a PR upstream.
-4. Add a **VCS repo** entry for the fork to the **root project** `composer.json` (VCS repos are not inherited transitively from recipes — they must live in the root project).
-5. Composer's VCS-repo priority makes the fork replace the upstream package. When the upstream merges and tags a release, switch back to Packagist and drop the VCS entry.
+The generic fork steps above apply with these specifics:
+
+- Fork into the `dynamic/` GitHub org, keeping the `silverstripe-` prefix; name the branch `feature/ss6-upgrade`.
+- The override is a **VCS repo** entry for the fork in the root project `composer.json`. Composer's VCS-repo priority makes the fork replace the upstream package; when upstream tags a release, switch back to Packagist and drop the entry.
 
 For Composer specifically, the manifest steps are:
 - Branch aliases — e.g. `"extra": { "branch-alias": { "dev-master": "6.x-dev" } }` (or alias the numbered branch, e.g. `"dev-6": "6.x-dev"`).

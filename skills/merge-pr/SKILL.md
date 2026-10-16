@@ -1,6 +1,6 @@
 ---
 name: merge-pr
-description: Use when the user asks to merge an approved Pull Request or Merge Request (for example, to merge a reviewed PR/MR or run a previous `/merge_pr` workflow); safely merges the request, cleans up associated branches, and synchronizes the local repository. Works with GitHub (`gh`) and GitLab (`glab`).
+description: Merge an approved GitHub PR or GitLab MR (gh/glab), then clean up branches and sync the local repo. Use when asked to "merge this PR", "merge the MR", "land it", "ship the PR", or run /merge_pr. Checks mergeability and CI first; strategy follows repo policy, not a default.
 ---
 
 # Skill: Merge PR
@@ -77,7 +77,7 @@ glab api "projects/:fullpath/merge_requests/<mr-number>"   # for the fields belo
 
 **GitHub:**
 ```bash
-gh pr merge <pr-number> --squash|--merge --delete-branch --subject "<commit-subject>" --body "<commit-body>"
+gh pr merge <pr-number> <--squash|--merge|--rebase> --delete-branch --subject "<commit-subject>" --body "<commit-body>"
 ```
 
 **GitLab:**
@@ -86,6 +86,7 @@ glab mr merge <mr-number> [--squash] --remove-source-branch --yes
 ```
 
 -   **Commit Message (when squashing):** Synthesize a clean, descriptive subject using conventional commits (e.g., `feat: PR title`). If the PR description contains important details, include them in the commit body.
+-   `--subject` / `--body` apply to `--squash` and `--merge` only; drop them for `--rebase`.
 -   `--delete-branch` (gh) / `--remove-source-branch` (glab) handles the remote branch cleanup on the source repository.
 
 ---
@@ -128,17 +129,18 @@ ends — no manual deletion needed.
 2.  **Pull Latest Changes:**
     ```bash
     git fetch origin
-    git pull origin <default-branch>
+    git pull --ff-only origin <default-branch>
     ```
 3.  **Sync Fork (if applicable):**
     If working on a fork, sync with upstream:
     ```bash
-    git remote | grep upstream && git fetch upstream && git merge upstream/<default-branch> && git push origin <default-branch>
+    git remote | grep -qx upstream && git fetch upstream && git merge --ff-only upstream/<default-branch> && git push origin <default-branch>
     ```
 4.  **Delete Local Branch:**
     ```bash
     git branch -D <feature-branch>
     ```
+    Use `-D`, not `-d`: after a squash or rebase merge the branch tip is not an ancestor of the default branch, so `-d` refuses. The PR is already merged, so nothing is lost.
 
 ---
 
