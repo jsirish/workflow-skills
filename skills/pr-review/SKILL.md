@@ -8,6 +8,17 @@ description: Request and manage pull request reviews using pr-agent (local CLI) 
 Primary reviewer: `pr-agent` (Qodo Merge), installed locally via pipx.
 Optional Claude second-pass for code PRs: `pr-review-toolkit:review-pr` (model-invocable). `code-review:code-review` is user-invocable only, so Claude cannot call it; the user can type `/code-review` themselves.
 
+## Host overrides
+
+pr-agent applies only on hosts where it is known working. **On the DAISY host (workspace `~/AI/DAISY`) pr-agent is broken** (silent ~150 ms pre-flight death, exception swallowed — verified 2026-10-04 and unchanged). There, skip the [Commands](#commands) below and use the DAISY fallback instead, documented in that workspace's `AGENTS.md` (§Code Review):
+
+1. In-session diff review of your own PR (`gh pr diff <N> --repo <owner>/<repo> > /tmp/pr-N.diff`).
+2. An independent reviewer subagent, spawned immediately after push (CI and review are independent). Demand a structured verdict: per finding, severity (BLOCKING/ADVISORY), file:line evidence, and — when a prior round exists — an explicit verify-or-refute pass on its claims.
+3. 1 clean round is the bar; then squash-merge (merges and any GitHub writes as the user's identity, never the bot's).
+4. Advisory findings become filed follow-up issues, not drops.
+
+Same fallback shape works on any host where pr-agent dies silently: a review that produces no output within seconds of invocation is a broken reviewer, not a clean PR — switch to the subagent fallback rather than retrying pr-agent.
+
 ## Environment
 
 pr-agent is configured entirely through **environment variables** — there is no user-global config file for the CLI (see [Notes](#notes)). Put this block in your shell rc (`~/.zshrc`) once, substituting your provider's endpoint, key var, and model:
