@@ -104,6 +104,20 @@ When augmenting a review:
 3. Carry FAIL/WARN items into the review as concrete findings the LLM pass can then explain or contextualise. WARN is not a green gate for "done" — investigate it — even though it doesn't block a push.
 4. Before a merge or a push you want a hard guarantee on, re-run with `--strict`.
 
+### Batch branches
+
+For a batch of several independent fixes in one repo (one branch per issue), don't run
+local-ci per branch plus again on the integration branch — that's N+1 identical runs.
+Run it **once on the integration branch** that cherry-picks every fix branch, and rely on
+each PR's GitHub CI to cover its individual branch. Run per-branch local-ci only when a
+branch carries unique tests the integration branch cannot exercise (rare — the integration
+branch contains those files too; usually only when a test depends on other state from its
+branch that cherry-picking reordered).
+
+The integration run is the merge gate: one `--strict --no-fix` pass there plus one
+local-dev/live verification of the combined surface, then push the per-issue branches and
+open their PRs.
+
 ## Status marker and the git-push gate
 
 Every non-dry run writes a one-line marker to `<git-dir>/local-ci-status`:
