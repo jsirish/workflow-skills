@@ -31,6 +31,11 @@
 #   --with-behat       Also run Behat (behat.yml) — opt-in; needs a browser/driver.
 #   --with-shellcheck  Force shellcheck even without a .shellcheckrc or a
 #                      shell-only project layout — opt-in.
+#   --post             After the run, publish the result to GitHub: a `local-ci`
+#                      commit status plus one upserted PR comment (see
+#                      local-ci-post.sh). Needs HEAD pushed and `gh` logged in;
+#                      otherwise it says why and skips. WARN posts as success
+#                      unless --strict is also given.
 #   --dry-run          Detect checks and print what WOULD run; execute nothing.
 #   -h, --help         Show this help.
 #
@@ -78,6 +83,7 @@ FRESH_DEPS=0
 WITH_BEHAT=0
 WITH_SHELLCHECK=0
 DRY=0
+POST=0
 DIRS=()
 
 while [ $# -gt 0 ]; do
@@ -90,6 +96,7 @@ while [ $# -gt 0 ]; do
     --fresh-deps)       FRESH_DEPS=1 ;;
     --with-behat)       WITH_BEHAT=1 ;;
     --with-shellcheck)  WITH_SHELLCHECK=1 ;;
+    --post)             POST=1 ;;
     --dry-run)          DRY=1 ;;
     -h|--help)          awk 'NR==1{next} /^#/{print; next} /^$/{next} {exit}' "$0"; exit 0 ;;
     --*)                echo "Unknown option: $1" >&2; exit 2 ;;
@@ -1068,6 +1075,8 @@ if [ "$DRY" -eq 0 ] && command -v git >/dev/null 2>&1; then
     MARKER_SHA="$(git -C "$d" rev-parse HEAD 2>/dev/null || echo none)"
     printf 'sha=%s result=%s ts=%s\n' \
       "$MARKER_SHA" "$MARKER_RESULT" "$(date +%s)" > "$MARKER_DIR/local-ci-status" 2>/dev/null || true
+    # Plain-text SUMMARY rows beside the marker, for local-ci-post.sh.
+    awk -F'\t' 'NF>=2 {printf "%s  %s\n", $1, $2}' "$RESULTS_FILE" > "$MARKER_DIR/local-ci-summary" 2>/dev/null || true
   done
 fi
 
@@ -1080,5 +1089,13 @@ elif grep -q '^WARN' "$RESULTS_FILE" 2>/dev/null; then
   echo "Result: no FAILs, but findings are WARN — read the SUMMARY above (re-run with --strict to gate)."
 else
   echo "Result: all checks passed."
+fi
+
+if [ "$POST" -eq 1 ] && [ "$DRY" -eq 0 ]; then
+  POST_ARGS=()
+  [ "$STRICT" -eq 1 ] && POST_ARGS+=(--strict)
+  for d in "${DIRS[@]}"; do
+    bash "$(dirname "$0")/local-ci-post.sh" ${POST_ARGS[@]+"${POST_ARGS[@]}"} "$d"
+  done
 fi
 exit "$FAILED"
