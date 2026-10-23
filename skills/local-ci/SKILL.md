@@ -75,6 +75,7 @@ Options:
 - `--strict` — escalate **every** check to FAIL on a non-zero exit, restoring hard-gating for the whole run in one flag. Implies `--strict-build` and `--strict-lint`. Use when you want the same hard gate GHA enforces, or before a push you want a real pass/fail on.
 - `--strict-build` — treat a failing `sake dev/build` as FAIL rather than WARN, without escalating anything else. A subset of `--strict`.
 - `--strict-lint` — treat failing phpcs/phpstan/eslint as FAIL rather than WARN, without escalating anything else. A subset of `--strict`.
+- `--post` — after the run, publish the result to GitHub (HEAD must already be pushed, so after a push run `local-ci-post.sh` alone rather than re-running the suite): a `local-ci` commit status on the pushed HEAD plus one PR comment carrying the SUMMARY (edited in place on later runs). See "Posting results to the PR" below.
 - `--fresh-deps` — force a real `composer install` even when `vendor/` exists. Mirrors GHA's clean-install behaviour; slower and mutates `vendor/`. Use before a PR to verify a clean dependency resolution.
 - `--with-behat` — also run Behat (off by default; it needs a browser + chromedriver).
 - `--with-shellcheck` — force shellcheck even without a `.shellcheckrc`.
@@ -125,6 +126,17 @@ Register it in `~/.claude/settings.json` under `hooks.PreToolUse` (matcher `Bash
 ```
 
 Bypass for an investigated, genuinely benign case: prefix the push with `SKIP_CI_GATE=1`.
+
+## Posting results to the PR
+
+`scripts/local-ci-post.sh` (also run by `local-ci.sh --post`) publishes the last run:
+
+- a commit status, context `local-ci`, on HEAD: PASS → `success`, FAIL → `failure`, WARN → `success` with `WARN` in the description (`failure` with `--strict`), NONE → nothing. The description reads `PASS n / WARN n / FAIL n`.
+- one PR comment (only ever the gh user's own) holding the SUMMARY, tagged `<!-- local-ci -->` so later runs edit it instead of adding another.
+
+It posts only when the marker sha equals HEAD and HEAD is on a remote branch, so run it after the push. It needs `gh` logged in with write access to the repo; any problem is reported and skipped, and it always exits 0. `--quiet` suppresses the "nothing to post" notes, for hook use.
+
+To post automatically after pushes, register `local-ci-post.sh --hook` as a Claude Code `PostToolUse` (Bash) hook alongside the push gate. In hook mode it reads the hook JSON from stdin and acts only on `git push` / `gh pr create` commands, in the hook's cwd. These statuses come from the developer's machine, not an independent runner, so do not make `local-ci` a required check on public repos.
 
 ## Notes
 
