@@ -8,10 +8,13 @@
 #   2. Upserts one PR comment (hidden marker <!-- local-ci -->) with the SUMMARY.
 #
 # Usage:
-#   local-ci-post.sh [--strict] [--quiet] [DIR]
+#   local-ci-post.sh [--strict] [--quiet] [--hook] [DIR]
 #
 #   --strict   WARN posts state=failure (default: success, "WARN" in the description).
 #   --quiet    Print nothing when there is nothing to post (hook use).
+#   --hook     Claude Code PostToolUse mode: read the hook JSON on stdin, do
+#              nothing unless the Bash command was a `git push` or
+#              `gh pr create`, and post for the hook's cwd. Implies --quiet.
 #   DIR        Repo to post for (default: current dir).
 #
 # Mapping: PASS -> success, FAIL -> failure, WARN -> success (failure under
@@ -30,17 +33,27 @@ set -uo pipefail
 
 STRICT=0
 QUIET=0
+HOOK=0
 DIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --strict) STRICT=1 ;;
     --quiet)  QUIET=1 ;;
+    --hook)   HOOK=1; QUIET=1 ;;
     -h|--help) awk 'NR==1{next} /^#/{print; next} /^$/{next} {exit}' "$0"; exit 0 ;;
     --*)      echo "local-ci-post: unknown option $1" >&2; exit 0 ;;
     *)        DIR="$1" ;;
   esac
   shift
 done
+
+if [ "$HOOK" -eq 1 ]; then
+  command -v jq >/dev/null 2>&1 || exit 0
+  INPUT="$(cat)"
+  CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+  printf '%s' "$CMD" | /usr/bin/grep -qE '(^|[;&|[:space:]])(git[^;&|]* push|gh pr create)([[:space:]]|$)' || exit 0
+  DIR="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)"
+fi
 [ -n "$DIR" ] || DIR="$(pwd)"
 
 GH="${LOCAL_CI_GH:-gh}"
@@ -77,8 +90,12 @@ if [ -z "$(git -C "$DIR" branch -r --contains "$HEAD_SHA" 2>/dev/null)" ]; then
   exit 0
 fi
 
-# owner/repo from the remote that carries HEAD (origin first).
+# owner/repo from origin.
 REMOTE_URL="$(git -C "$DIR" remote get-url origin 2>/dev/null)" || { warn "no 'origin' remote; nothing posted."; exit 0; }
+case "$REMOTE_URL" in
+  *github.com[:/]*) ;;
+  *) say "origin is not a github.com remote; nothing posted."; exit 0 ;;
+esac
 SLUG="$(printf '%s' "$REMOTE_URL" | sed -E 's#^[a-z+]+://([^/@]*@)?[^/:]*(:[0-9]+)?/##; s#^[^/@]*@[^/:]*:##; s#\.git$##; s#/$##')"
 if ! printf '%s' "$SLUG" | /usr/bin/grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
   warn "cannot derive owner/repo from the origin URL; nothing posted."
@@ -130,9 +147,11 @@ trap 'rm -f "$BODY_FILE"' EXIT
   fi
 } > "$BODY_FILE"
 
+ME="$("$GH" api user -q .login 2>/dev/null)"
+[ -n "$ME" ] || { warn "could not resolve the gh login; comment skipped."; exit 0; }
 # Capture first, then pick the id: a failed lookup must not fall through to a duplicate POST.
 if ! IDS="$("$GH" api --paginate "repos/$SLUG/issues/$PR/comments" \
-        -q ".[] | select(.body | startswith(\"$MARKER_TAG\")) | .id" 2>/dev/null)"; then
+        -q ".[] | select(.user.login == \"$ME\" and (.body | startswith(\"$MARKER_TAG\"))) | .id" 2>/dev/null)"; then
   warn "could not list comments on PR #$PR; comment skipped."; exit 0
 fi
 CID="$(printf '%s\n' "$IDS" | head -1)"

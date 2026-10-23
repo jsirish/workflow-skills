@@ -25,6 +25,7 @@ echo "$*" >> "$FAKE_GH_LOG"
 case "$1 $2" in
   "pr list") echo 7 ;;
   "api --paginate") echo "${FAKE_COMMENT_ID:-}" ;;
+  "api user") echo me ;;
 esac
 exit 0
 EOF
@@ -118,6 +119,7 @@ echo "$*" >> "$FAKE_GH_LOG"
 case "$1 $2" in
   "pr list") echo 7 ;;
   "api --paginate") exit 1 ;;
+  "api user") echo me ;;
 esac
 exit 0
 EOF2
@@ -134,6 +136,26 @@ git remote set-url origin "https://user:SECRETTOKEN@example.com:8443/a/b/c"
 write_marker "$SHA" PASS
 OUT="$(bash "$POST" "$TMP/work" 2>&1)"
 printf '%s' "$OUT" | grep -q SECRETTOKEN && fail "token leaked" || pass "credentials not echoed"
+
+# 13. --hook acts only on push / pr create, and uses the hook cwd.
+git remote set-url origin "git@github.com:acme/widgets.git"
+write_marker "$SHA" PASS
+cat > "$TMP/gh" <<'EOF2'
+#!/usr/bin/env bash
+echo "$*" >> "$FAKE_GH_LOG"
+case "$1 $2" in "pr list") echo 7 ;; "api user") echo me ;; esac
+exit 0
+EOF2
+reset
+printf '{"tool_input":{"command":"ls -la"},"cwd":"%s"}' "$TMP/work" | bash "$POST" --hook
+[ ! -s "$FAKE_GH_LOG" ] && pass "--hook ignores unrelated commands" || fail "--hook posted for ls"
+printf '{"tool_input":{"command":"git push -u origin feat"},"cwd":"%s"}' "$TMP/work" | bash "$POST" --hook
+grep -q 'statuses/' "$FAKE_GH_LOG" && pass "--hook posts after git push" || fail "--hook silent after push"
+
+# 14. A non-github remote is skipped.
+git remote set-url origin "git@gitlab.com:acme/widgets.git"
+reset; bash "$POST" "$TMP/work" >/dev/null 2>&1
+[ ! -s "$FAKE_GH_LOG" ] && pass "non-github remote skipped" || fail "posted to non-github remote"
 
 [ "$FAILURES" -eq 0 ] || { echo "$FAILURES failure(s)" >&2; exit 1; }
 echo "all passed"

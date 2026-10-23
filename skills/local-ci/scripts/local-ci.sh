@@ -33,8 +33,9 @@
 #                      shell-only project layout — opt-in.
 #   --post             After the run, publish the result to GitHub: a `local-ci`
 #                      commit status plus one upserted PR comment (see
-#                      local-ci-post.sh). Needs HEAD pushed and `gh` logged in;
-#                      otherwise it says why and skips. WARN posts as success
+#                      local-ci-post.sh). Needs HEAD already pushed (so use it on
+#                      a re-run after the push, or run local-ci-post.sh alone)
+#                      and `gh` logged in; otherwise it says why and skips. WARN posts as success
 #                      unless --strict is also given.
 #   --dry-run          Detect checks and print what WOULD run; execute nothing.
 #   -h, --help         Show this help.
@@ -1095,7 +1096,11 @@ fi
 if [ "$POST" -eq 1 ] && [ "$DRY" -eq 0 ]; then
   POST_ARGS=()
   [ "$STRICT" -eq 1 ] && POST_ARGS+=(--strict)
+  POSTED_GITDIRS=" "
   for d in "${DIRS[@]}"; do
+    gd="$(git -C "$d" rev-parse --absolute-git-dir 2>/dev/null)" || continue
+    case "$POSTED_GITDIRS" in *" $gd "*) continue ;; esac
+    POSTED_GITDIRS="$POSTED_GITDIRS$gd "
     bash "$(dirname "$0")/local-ci-post.sh" ${POST_ARGS[@]+"${POST_ARGS[@]}"} "$d"
   done
 fi
