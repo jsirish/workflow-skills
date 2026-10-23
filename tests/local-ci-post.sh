@@ -99,14 +99,41 @@ reset; write_marker "$SHA2" PASS; bash "$POST" "$TMP/work" >/dev/null 2>&1
 OUT="$(bash "$POST" --quiet "$TMP/work" 2>&1)"
 [ -z "$OUT" ] && pass "--quiet silent on skip" || fail "--quiet printed: $OUT"
 
-# 9. Always exits 0, even when gh fails.
-cat > "$TMP/gh" <<'EOF'
+# 9. gh failure: warns with gh's reason, still exits 0 (marker is for the pushed HEAD).
+git reset -q --hard "$SHA"
+cat > "$TMP/gh" <<'EOF2'
 #!/usr/bin/env bash
+echo "HTTP 422: No commit found" >&2
 exit 1
-EOF
+EOF2
 write_marker "$SHA" PASS
-bash "$POST" "$TMP/work" >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] && pass "gh failure does not fail the caller" || fail "exit $rc"
+OUT="$(bash "$POST" "$TMP/work" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && printf '%s' "$OUT" | grep -q 'HTTP 422' \
+  && pass "gh failure warns with the reason and exits 0" || fail "gh failure: rc=$rc out=$OUT"
+
+# 10. Failed comment lookup must not POST a duplicate.
+cat > "$TMP/gh" <<'EOF2'
+#!/usr/bin/env bash
+echo "$*" >> "$FAKE_GH_LOG"
+case "$1 $2" in
+  "pr list") echo 7 ;;
+  "api --paginate") exit 1 ;;
+esac
+exit 0
+EOF2
+reset
+bash "$POST" "$TMP/work" >/dev/null 2>&1
+if grep -q -- '-X POST repos/acme/widgets/issues/7/comments' "$FAKE_GH_LOG"; then fail "duplicate POST after lookup failure"; else pass "lookup failure does not duplicate the comment"; fi
+
+# 11. Skips print a note.
+write_marker "0000000000000000000000000000000000000000" PASS
+bash "$POST" "$TMP/work" 2>&1 | grep -q 're-run local-ci' && pass "stale skip prints a note" || fail "stale skip silent"
+
+# 12. Slug with embedded credentials is rejected, not echoed.
+git remote set-url origin "https://user:SECRETTOKEN@example.com:8443/a/b/c"
+write_marker "$SHA" PASS
+OUT="$(bash "$POST" "$TMP/work" 2>&1)"
+printf '%s' "$OUT" | grep -q SECRETTOKEN && fail "token leaked" || pass "credentials not echoed"
 
 [ "$FAILURES" -eq 0 ] || { echo "$FAILURES failure(s)" >&2; exit 1; }
 echo "all passed"

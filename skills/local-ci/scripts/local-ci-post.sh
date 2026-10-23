@@ -49,7 +49,7 @@ MARKER_TAG='<!-- local-ci -->'
 say()  { [ "$QUIET" -eq 1 ] || echo "local-ci-post: $*" >&2; }
 warn() { echo "local-ci-post: $*" >&2; }
 
-command -v "$GH" >/dev/null 2>&1 || { say "gh not found; nothing posted."; exit 0; }
+command -v "$GH" >/dev/null 2>&1 || { warn "gh not found; nothing posted."; exit 0; }
 GITDIR="$(git -C "$DIR" rev-parse --absolute-git-dir 2>/dev/null)" || { say "not a git repo; nothing posted."; exit 0; }
 MARKER="$GITDIR/local-ci-status"
 SUMMARY="$GITDIR/local-ci-summary"
@@ -63,7 +63,7 @@ for kv in $(cat "$MARKER"); do
   esac
 done
 
-HEAD_SHA="$(git -C "$DIR" rev-parse HEAD 2>/dev/null)" || exit 0
+HEAD_SHA="$(git -C "$DIR" rev-parse HEAD 2>/dev/null)" || { say "cannot resolve HEAD; nothing posted."; exit 0; }
 if [ "$M_SHA" != "$HEAD_SHA" ]; then
   say "last local-ci run was for ${M_SHA:0:7}, HEAD is ${HEAD_SHA:0:7}; re-run local-ci first. Nothing posted."
   exit 0
@@ -78,9 +78,12 @@ if [ -z "$(git -C "$DIR" branch -r --contains "$HEAD_SHA" 2>/dev/null)" ]; then
 fi
 
 # owner/repo from the remote that carries HEAD (origin first).
-REMOTE_URL="$(git -C "$DIR" remote get-url origin 2>/dev/null)" || exit 0
-SLUG="$(printf '%s' "$REMOTE_URL" | sed -E 's#^(git@|ssh://git@|https?://)[^/:]*[:/]##; s#\.git$##')"
-case "$SLUG" in */*) ;; *) warn "cannot derive owner/repo from $REMOTE_URL"; exit 0 ;; esac
+REMOTE_URL="$(git -C "$DIR" remote get-url origin 2>/dev/null)" || { warn "no 'origin' remote; nothing posted."; exit 0; }
+SLUG="$(printf '%s' "$REMOTE_URL" | sed -E 's#^[a-z+]+://([^/@]*@)?[^/:]*(:[0-9]+)?/##; s#^[^/@]*@[^/:]*:##; s#\.git$##; s#/$##')"
+if ! printf '%s' "$SLUG" | /usr/bin/grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
+  warn "cannot derive owner/repo from the origin URL; nothing posted."
+  exit 0
+fi
 
 N_PASS=0 N_WARN=0 N_FAIL=0
 if [ -f "$SUMMARY" ]; then
@@ -97,17 +100,19 @@ case "$M_RESULT" in
 esac
 DESC="$M_RESULT: PASS $N_PASS / WARN $N_WARN / FAIL $N_FAIL"
 
-if ! "$GH" api -X POST "repos/$SLUG/statuses/$HEAD_SHA" \
-     -f context=local-ci -f state="$STATE" -f description="$DESC" >/dev/null 2>&1; then
-  warn "status POST to $SLUG@${HEAD_SHA:0:7} failed (gh auth, scope or permissions)."
+if ! ERR="$("$GH" api -X POST "repos/$SLUG/statuses/$HEAD_SHA" \
+     -f context=local-ci -f state="$STATE" -f description="$DESC" 2>&1 >/dev/null)"; then
+  warn "status POST to $SLUG@${HEAD_SHA:0:7} failed: $(printf '%s' "$ERR" | head -1)"
   exit 0
 fi
 say "status local-ci=$STATE ($DESC) on $SLUG@${HEAD_SHA:0:7}"
 
 # PR comment: only when this branch has an open PR.
 BRANCH="$(git -C "$DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)"
-[ -n "$BRANCH" ] && [ "$BRANCH" != "HEAD" ] || exit 0
-PR="$("$GH" pr list -R "$SLUG" --head "$BRANCH" --state open --json number -q '.[0].number' 2>/dev/null)"
+if [ -z "$BRANCH" ] || [ "$BRANCH" = "HEAD" ]; then say "detached HEAD; status only, no PR comment."; exit 0; fi
+if ! PR="$("$GH" pr list -R "$SLUG" --head "$BRANCH" --state open --json number -q '.[0].number' 2>/dev/null)"; then
+  warn "could not look up the PR for $BRANCH; status only."; exit 0
+fi
 [ -n "$PR" ] || { say "no open PR for $BRANCH; status only."; exit 0; }
 
 BODY_FILE="$(mktemp -t local-ci-post.XXXXXX)"
@@ -125,8 +130,12 @@ trap 'rm -f "$BODY_FILE"' EXIT
   fi
 } > "$BODY_FILE"
 
-CID="$("$GH" api --paginate "repos/$SLUG/issues/$PR/comments" \
-        -q ".[] | select(.body | contains(\"$MARKER_TAG\")) | .id" 2>/dev/null | head -1)"
+# Capture first, then pick the id: a failed lookup must not fall through to a duplicate POST.
+if ! IDS="$("$GH" api --paginate "repos/$SLUG/issues/$PR/comments" \
+        -q ".[] | select(.body | startswith(\"$MARKER_TAG\")) | .id" 2>/dev/null)"; then
+  warn "could not list comments on PR #$PR; comment skipped."; exit 0
+fi
+CID="$(printf '%s\n' "$IDS" | head -1)"
 if [ -n "$CID" ]; then
   "$GH" api -X PATCH "repos/$SLUG/issues/comments/$CID" -F body=@"$BODY_FILE" >/dev/null 2>&1 \
     && say "updated PR #$PR comment" || warn "failed to update PR #$PR comment"

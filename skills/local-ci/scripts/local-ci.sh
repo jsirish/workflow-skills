@@ -1076,6 +1076,7 @@ if [ "$DRY" -eq 0 ] && command -v git >/dev/null 2>&1; then
     printf 'sha=%s result=%s ts=%s\n' \
       "$MARKER_SHA" "$MARKER_RESULT" "$(date +%s)" > "$MARKER_DIR/local-ci-status" 2>/dev/null || true
     # Plain-text SUMMARY rows beside the marker, for local-ci-post.sh.
+    rm -f "$MARKER_DIR/local-ci-summary"
     awk -F'\t' 'NF>=2 {printf "%s  %s\n", $1, $2}' "$RESULTS_FILE" > "$MARKER_DIR/local-ci-summary" 2>/dev/null || true
   done
 fi
